@@ -1,0 +1,18 @@
+# 本地配置（含敏感信息，不要提交到 GitHub）
+config.yaml
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# 本地数据
+seen_stocks.json
+
+# OS
+.DS_Store
+Thumbs.db

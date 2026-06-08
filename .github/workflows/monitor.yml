@@ -1,0 +1,50 @@
+name: 股票监控
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # 每 5 分钟运行一次
+  workflow_dispatch:          # 支持手动触发
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install httpx pyyaml
+
+      - name: 恢复通知记录
+        uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: seen_stocks.json
+          key: stocks-seen
+          restore-keys: stocks-seen
+
+      - name: 运行监控
+        run: python github_main.py
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_SSL: ${{ secrets.SMTP_SSL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          TARGET_USER: ${{ vars.TARGET_USER || 'aleabitoreddit' }}
+
+      - name: 保存通知记录
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: seen_stocks.json
+          key: stocks-seen
