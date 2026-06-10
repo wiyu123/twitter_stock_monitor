@@ -114,28 +114,20 @@ async def main():
                 tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
                 continue
 
-            new_stocks = tracker.filter_new_stocks(stocks)
-            if not new_stocks:
-                logger.info(f"推文 {tweet['id']} 的标的已全部通知过，跳过")
-                tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
-                continue
-
-            logger.info(f"新标的! 推文 {tweet['id']}: {[(c, m) for c, m in new_stocks]}")
+            logger.info(f"新标的! 推文 {tweet['id']}: {[(c, m) for c, m in stocks]}")
 
             success = mailer.send_stock_alert(
                 to_addrs=recipients,
                 tweet_text=tweet["text"],
                 tweet_url=tweet["url"],
                 tweet_time=tweet["created_at"],
-                new_stocks=new_stocks,
+                new_stocks=stocks,
             )
 
             if success:
-                for code, market in new_stocks:
-                    tracker.mark_stock_seen(code, tweet["id"], tweet["created_at"])
                 sent_count += 1
 
-            # 无论是否推送成功，标记推文已处理
+            # 推文已处理，不再重复推送
             tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
 
         logger.info(f"本轮推送 {sent_count} 篇推文")

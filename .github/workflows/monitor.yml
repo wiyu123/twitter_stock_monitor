@@ -29,9 +29,8 @@ jobs:
         id: cache
         with:
           path: |
-            seen_stocks.json
             seen_tweets.json
-          key: monitor-state-v2
+          key: monitor-state-v3
 
       - name: 运行监控
         run: python github_main.py
@@ -49,6 +48,5 @@ jobs:
         if: always()
         with:
           path: |
-            seen_stocks.json
             seen_tweets.json
-          key: monitor-state-v2
+          key: monitor-state-v3
