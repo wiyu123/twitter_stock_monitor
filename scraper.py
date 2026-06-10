@@ -56,9 +56,9 @@ class TwitterScraper:
         "TweetResultByRestId": "SgZWKwvBiOKrSC0QeOGvXw",
     }
 
-    # 缓存的 query IDs
+    # 缓存的 query IDs (用默认值即可，很少变化)
     _query_ids_cache: dict = {}
-    _query_ids_fetched = False
+    _query_ids_fetched = True  # 跳过 JS 解析，直接用默认值
 
     def __init__(self, username: str = "", password: str = "",
                  target_user: str = "serenity", proxy: str = None):
@@ -358,8 +358,7 @@ class TwitterScraper:
     async def _check_pinned_tweets(self, headers: dict) -> list[dict]:
         """检查 pinned tweet 附近是否有新推文
 
-        策略: 获取当前 pinned tweet ID，如果和上次不同，
-        尝试用已知的 worker ID 范围探测。
+        策略: 检测 pinned tweet 是否变化，变化时用已知 worker/seq 探测新推文。
         """
         user = await self.get_user()
         if not user:
@@ -376,6 +375,8 @@ class TwitterScraper:
         latest_pinned = pinned_ids[0]
         if not hasattr(self, "_last_pinned_id"):
             self._last_pinned_id = latest_pinned
+            # 首次运行只记录，不做探测
+            return []
 
         found = []
 
@@ -400,13 +401,12 @@ class TwitterScraper:
         # 覆盖从 pinned 时间到"现在"的范围
         now_ts = int(time_module.time() * 1000) - 1288834974657  # Twitter epoch
 
-        # 只探测几个代表性组合
-        workers_to_try = [pinned_worker, 427, 436]  # 已知的 worker
-        seqs_to_try = [pinned_seq, 30, 38, 0, 1024, 2048, 3072]
-        ts_offsets = [0, 3600000, 7200000, 43200000, 86400000, 172800000, 345600000]
-        # 0s, 1h, 2h, 12h, 24h, 48h, 96h
+        # 只探测少数几个代表性组合（pin 变时大概率能命中）
+        workers_to_try = [pinned_worker, 427]
+        seqs_to_try = [pinned_seq, 38]
+        ts_offsets = [0, 3600000, 14400000]  # 0s, 1h, 4h
 
-        max_checks = 12  # 每轮最多探测 12 个 ID
+        max_checks = 3  # 每轮最多探测 3 个 ID
         checked = 0
 
         for ts_off in ts_offsets:
