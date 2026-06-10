@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import re
-import time as time_module
 from datetime import datetime
 from typing import Optional
 
@@ -356,78 +355,54 @@ class TwitterScraper:
             return None
 
     async def _check_pinned_tweets(self, headers: dict) -> list[dict]:
-        """检查 pinned tweet 附近是否有新推文
+        """用 TweetResultByRestId 扫描最近推文，弥补 UserTweets 的 CDN 缓存延迟。
 
-        策略: 检测 pinned tweet 是否变化，变化时用已知 worker/seq 探测新推文。
+        UserTweets API 可能返回几周前的数据。这里用 Snowflake ID 时间戳估算，
+        在"上一批已知推文"和"现在"之间扫描，找到漏掉的实时推文。
         """
-        user = await self.get_user()
-        if not user:
-            return []
-
-        try:
-            pinned_ids = user.get("pinned_tweet_ids_str", [])
-        except Exception:
-            return []
-
-        if not pinned_ids:
-            return []
-
-        latest_pinned = pinned_ids[0]
-        if not hasattr(self, "_last_pinned_id"):
-            self._last_pinned_id = latest_pinned
-            # 首次运行只记录，不做探测
-            return []
+        import time as time_mod
 
         found = []
+        EPOCH = 1288834974657
+        now_ts = int(time_mod.time() * 1000) - EPOCH
+        client = self._get_client()
+        qid = self._get_query_id("TweetResultByRestId")
+        if not qid:
+            return found
 
-        # 如果 pinned tweet 变了，在它附近探测新推文
-        if latest_pinned != self._last_pinned_id:
-            logger.info(f"Pinned tweet 已变化: {self._last_pinned_id} → {latest_pinned}")
-            self._last_pinned_id = latest_pinned
+        # 已知该用户的 worker/seq 组合
+        workers = [427, 436, 428, 435, 429, 434]
+        seqs = [38, 30, 0, 1024, 2048]
 
-            # 探测新 pinned tweet 本身
-            tweet = await self._fetch_tweet_by_id(latest_pinned)
-            if tweet:
-                found.append(tweet)
+        # 从"上一轮最旧缓存"到"现在"，每隔一段时间取一个时间点
+        # 每轮检查 25 个候选 ID，在 GitHub runner 上约 5 秒完成
+        start_ts = now_ts - 86400000 * 7  # 扫描最近 7 天
+        max_checks = 25
+        step = max(1, (now_ts - start_ts) // max_checks)
 
-        # 每个轮询周期也尝试探测 pinned ID 上方的新推文
-        # （即使 pinned 没变，也可能有新推文）
-        pinned_int = int(latest_pinned)
-        pinned_ts = pinned_int >> 22
-        pinned_seq = pinned_int & 0xFFF
-        pinned_worker = (pinned_int >> 12) & 0x3FF
-
-        # 尝试时间偏移 + 已知 worker/seq 组合
-        # 覆盖从 pinned 时间到"现在"的范围
-        now_ts = int(time_module.time() * 1000) - 1288834974657  # Twitter epoch
-
-        # 只探测少数几个代表性组合（pin 变时大概率能命中）
-        workers_to_try = [pinned_worker, 427]
-        seqs_to_try = [pinned_seq, 38]
-        ts_offsets = [0, 3600000, 14400000]  # 0s, 1h, 4h
-
-        max_checks = 3  # 每轮最多探测 3 个 ID
         checked = 0
+        highest_found_id = 0
 
-        for ts_off in ts_offsets:
-            target_ts = now_ts - ts_off
-            if target_ts <= pinned_ts:
-                continue
-            for w in workers_to_try:
-                for s in seqs_to_try:
+        t = now_ts
+        while t >= start_ts and checked < max_checks:
+            for w in workers:
+                for s in seqs:
                     if checked >= max_checks:
-                        return found
-                    lower = (w << 12) | s
-                    est_id = str((target_ts << 22) | lower)
-                    if int(est_id) <= pinned_int:
-                        continue
+                        break
+                    est_id = str((t << 22) | ((w << 12) | s))
                     tweet = await self._fetch_tweet_by_id(est_id)
                     checked += 1
                     if tweet:
                         found.append(tweet)
-                        # 如果找到，更新 pinned_int 避免重复探测同一范围
-                        pinned_int = max(pinned_int, int(tweet["id"]))
+                        highest_found_id = max(highest_found_id, int(tweet["id"]))
+                        logger.debug(f"实时发现: {tweet['id'][:12]}...")
+                        break  # 这个时间点找到了，跳到下一个
+                if checked >= max_checks:
+                    break
+            t -= step
 
+        if found:
+            logger.info(f"实时探测找到 {len(found)} 条新推文 (共检查 {checked} 个候选)")
         return found
 
     def _parse_timeline(self, data: dict) -> list[dict]:
