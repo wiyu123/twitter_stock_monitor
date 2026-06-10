@@ -28,9 +28,10 @@ jobs:
         uses: actions/cache/restore@v4
         id: cache
         with:
-          path: seen_stocks.json
-          key: stocks-seen
-          restore-keys: stocks-seen
+          path: |
+            seen_stocks.json
+            seen_tweets.json
+          key: monitor-state-v2
 
       - name: 运行监控
         run: python github_main.py
@@ -47,5 +48,7 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: seen_stocks.json
-          key: stocks-seen
+          path: |
+            seen_stocks.json
+            seen_tweets.json
+          key: monitor-state-v2

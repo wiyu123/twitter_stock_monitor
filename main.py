@@ -142,7 +142,7 @@ class Monitor:
                 if success:
                     # 标记为已通知
                     for code, market in new_stocks:
-                        self.tracker.mark_seen(code, tweet_id, tweet_time)
+                        self.tracker.mark_stock_seen(code, tweet_id, tweet_time)
                     new_send_count += 1
 
             if new_send_count > 0:

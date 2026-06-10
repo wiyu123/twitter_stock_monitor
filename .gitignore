@@ -12,6 +12,7 @@ __pycache__/
 
 # 本地数据
 seen_stocks.json
+seen_tweets.json
 
 # OS
 .DS_Store
