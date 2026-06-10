@@ -370,14 +370,14 @@ class TwitterScraper:
         if not qid:
             return found
 
-        # 已知该用户的 worker/seq 组合
-        workers = [427, 436, 428, 435, 429, 434]
-        seqs = [38, 30, 0, 1024, 2048]
+        # 已知该用户的 worker: 427(置顶推文), 436(688017推文)，优先尝试
+        # 序列号从小到大（新推文 seq 递增）
+        workers = [427, 436, 428, 435, 426, 437, 425, 438, 429, 434]
+        seqs = [0, 1, 2, 3, 4, 5, 10, 20, 30, 38, 50, 100]
 
-        # 从"上一轮最旧缓存"到"现在"，每隔一段时间取一个时间点
-        # 每轮检查 25 个候选 ID，在 GitHub runner 上约 5 秒完成
-        start_ts = now_ts - 86400000 * 7  # 扫描最近 7 天
-        max_checks = 25
+        # 从"24小时前"到"现在"，密集扫描
+        start_ts = now_ts - 86400000  # 最近 24 小时
+        max_checks = 30
         step = max(1, (now_ts - start_ts) // max_checks)
 
         checked = 0
