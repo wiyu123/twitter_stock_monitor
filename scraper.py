@@ -60,19 +60,27 @@ class TwitterScraper:
     _query_ids_fetched = True  # 跳过 JS 解析，直接用默认值
 
     def __init__(self, username: str = "", password: str = "",
-                 target_user: str = "serenity", proxy: str = None):
+                 target_user: str = "serenity", proxy: str = None,
+                 auth_token: str = ""):
         self.target_user = target_user
         self.proxy = proxy
         self.username = username
         self.password = password
+        self.auth_token = auth_token
         self._client: Optional[httpx.AsyncClient] = None
         self._guest_token: Optional[str] = None
+        self._ct0_token: Optional[str] = None
         self._user_id: Optional[str] = None
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
+            cookies = httpx.Cookies()
+            # 如果提供了 auth_token，设为 cookie 以获得已登录状态的 API 访问
+            if self.auth_token:
+                cookies.set("auth_token", self.auth_token, domain=".x.com")
             self._client = httpx.AsyncClient(
                 proxy=self.proxy,
+                cookies=cookies,
                 headers={"User-Agent": USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9"},
                 timeout=30,
                 follow_redirects=True,
@@ -122,13 +130,39 @@ class TwitterScraper:
         )
 
     async def _api_headers(self) -> dict:
-        """获取 API 请求头（含 guest token）"""
+        """获取 API 请求头（含认证信息）"""
+        h = {"Authorization": BEARER_TOKEN}
+
+        # 已登录: 用 auth_token cookie + ct0 CSRF token
+        if self.auth_token:
+            if not self._ct0_token:
+                await self._init_auth_session()
+            if self._ct0_token:
+                h["x-csrf-token"] = self._ct0_token
+            # 登录状态不需要 guest token
+            return h
+
+        # 未登录: 用 guest token
         if not self._guest_token:
             await self._refresh_guest_token()
-        return {
-            "Authorization": BEARER_TOKEN,
-            "X-Guest-Token": self._guest_token or "",
-        }
+        h["X-Guest-Token"] = self._guest_token or ""
+        return h
+
+    async def _init_auth_session(self):
+        """用 auth_token 初始化已登录会话，获取 ct0 token"""
+        client = self._get_client()
+        try:
+            r = await client.get("https://x.com/home")
+            # 提取 ct0 cookie
+            for cookie in client.cookies.jar:
+                if cookie.name == "ct0" and cookie.domain in (".x.com", "x.com"):
+                    self._ct0_token = cookie.value
+                    logger.debug("已获取 ct0 token (登录态)")
+                    break
+            if not self._ct0_token:
+                logger.warning("未能获取 ct0 token，可能 auth_token 已过期")
+        except Exception as e:
+            logger.warning(f"初始化登录会话失败: {e}")
 
     async def _refresh_guest_token(self) -> bool:
         """刷新 guest token"""

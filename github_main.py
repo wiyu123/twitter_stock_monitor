@@ -68,6 +68,7 @@ async def main():
     scraper = TwitterScraper(
         target_user=tw_cfg["target_user"],
         proxy=tw_cfg["proxy"],  # GitHub runner 在美国，不需要代理
+        auth_token=os.getenv("X_AUTH_TOKEN", ""),
     )
     tracker = StockTracker()
     mailer = Mailer(smtp_cfg)
