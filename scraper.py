@@ -316,21 +316,6 @@ class TwitterScraper:
                 tweets.sort(key=lambda t: int(t.get("id", "0")), reverse=True)
                 tweets = tweets[:count]
             logger.info(f"获取到 @{self.target_user} 最近 {len(tweets)} 条推文")
-
-            # ── 补充: 检查 pinned tweet 附近的新推文 ──
-            # UserTweets API 有 CDN 缓存，可能延迟数小时到数天。
-            # 但 pinned tweet (置顶推文) 可通过 UserByScreenName 实时获取，
-            # 如果 pinned tweet 变了说明有新内容发布。
-            speculative = await self._check_pinned_tweets(headers)
-            if speculative:
-                existing_ids = {t["id"] for t in tweets}
-                for st in speculative:
-                    if st["id"] not in existing_ids:
-                        tweets.append(st)
-                        existing_ids.add(st["id"])
-                tweets.sort(key=lambda t: int(t.get("id", "0")), reverse=True)
-                tweets = tweets[:count]
-                logger.info(f"合并后共 {len(tweets)} 条推文 (含 {len(speculative)} 条实时补充)")
         else:
             logger.warning(f"未获取到 @{self.target_user} 的推文")
         return tweets
