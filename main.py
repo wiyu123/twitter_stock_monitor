@@ -71,7 +71,7 @@ class Monitor:
         self.mailer = Mailer(smtp_cfg)
 
         # 收件人
-        email_file = config.get("email_list_file", "emails.txt")
+        email_file = config.get("email_list_file", "emails.csv")
         self.recipients = load_recipients(
             os.path.join(BASE_DIR, email_file)
         )
@@ -168,7 +168,7 @@ class Monitor:
 
         # 验证收件人
         if not self.recipients:
-            logger.warning("⚠️  收件人列表为空！请检查 emails.txt")
+            logger.warning("⚠️  收件人列表为空！请检查 emails.csv")
 
         while self._running:
             await self.run_once()

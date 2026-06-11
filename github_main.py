@@ -138,7 +138,7 @@ async def main():
         logger.error("未设置 SMTP_USER 或 SMTP_PASS 环境变量！")
         sys.exit(1)
 
-    recipients = load_recipients(os.path.join(BASE_DIR, "emails.txt"))
+    recipients = load_recipients(os.path.join(BASE_DIR, "emails.csv"))
     if not recipients:
         logger.error("收件人列表为空")
         sys.exit(1)
