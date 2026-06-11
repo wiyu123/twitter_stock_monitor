@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-GitHub Actions 版入口 — 单次执行，由 cron 每 5 分钟调度。
-从环境变量读取密钥，不依赖 config.yaml 中的 SMTP 密码。
+GitHub Actions 版入口 — 单次调度启动，内部循环运行 6 小时。
+公开仓库 GitHub Actions 分钟不限量，6 小时是单次任务上限。
+每 300 秒 (5 分钟) 执行一次检查，到达 6 小时后自动退出等待下次 cron 重启。
 """
 
 import asyncio
@@ -10,7 +11,6 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-# 确保当前目录在 path 中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scraper import TwitterScraper
@@ -27,9 +27,11 @@ logger = logging.getLogger("github-monitor")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+SLEEP_SECONDS = 300        # 5 分钟
+MAX_RUNTIME_SECONDS = 6 * 3600  # 6 小时 (GitHub Actions 单次上限)
+
 
 def get_smtp_config() -> dict:
-    """从环境变量读取 SMTP 配置"""
     return {
         "host": os.getenv("SMTP_HOST", "smtp.qq.com"),
         "port": int(os.getenv("SMTP_PORT", "465")),
@@ -40,49 +42,15 @@ def get_smtp_config() -> dict:
     }
 
 
-def get_twitter_config() -> dict:
-    """从环境变量读取 Twitter 配置"""
-    return {
-        "target_user": os.getenv("TARGET_USER", "aleabitoreddit"),
-        "proxy": os.getenv("TWITTER_PROXY", "").strip() or None,
-    }
-
-
-async def main():
-    # 加载 SMTP 配置
-    smtp_cfg = get_smtp_config()
-    if not smtp_cfg.get("username") or not smtp_cfg.get("password"):
-        logger.error("未设置 SMTP_USER 或 SMTP_PASS 环境变量！")
-        sys.exit(1)
-
-    # 加载 Twitter 配置
-    tw_cfg = get_twitter_config()
-
-    # 加载收件人
-    recipients = load_recipients(os.path.join(BASE_DIR, "emails.txt"))
-    if not recipients:
-        logger.error("收件人列表为空")
-        sys.exit(1)
-
-    # 初始化模块
-    scraper = TwitterScraper(
-        target_user=tw_cfg["target_user"],
-        proxy=tw_cfg["proxy"],  # GitHub runner 在美国，不需要代理
-        auth_token=os.getenv("X_AUTH_TOKEN", ""),
-    )
-    tracker = StockTracker()
-    mailer = Mailer(smtp_cfg)
-
-    logger.info(f"开始检查 @{tw_cfg['target_user']} ...")
-
+async def run_check(scraper, tracker, mailer, recipients):
+    """单次检查 → 抓推文 → 过滤 → 发邮件"""
     try:
-        # 抓取最新推文
         tweets = await scraper.get_recent_tweets(count=10)
         if not tweets:
             logger.info("未获取到推文")
             return
 
-        # 只保留最近 1 小时内的
+        # 只保留最近 1 小时内发布的
         one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         recent = [t for t in tweets if t["created_at"] and t["created_at"] >= one_hour_ago]
         if len(recent) < len(tweets):
@@ -96,18 +64,14 @@ async def main():
         new_tweets = []
         for t in recent:
             if tracker.is_tweet_processed(t["id"]):
-                logger.debug(f"跳过已处理推文: {t['id']}")
                 continue
             new_tweets.append(t)
-        if len(new_tweets) < len(recent):
-            logger.info(f"跳过 {len(recent) - len(new_tweets)} 篇已推送推文，保留 {len(new_tweets)} 篇")
 
         if not new_tweets:
-            logger.info("无新推文")
             return
 
-        # 处理每条推文
-        sent_count = 0
+        logger.info(f"发现 {len(new_tweets)} 篇未处理的推文")
+
         for tweet in new_tweets:
             stocks = extract_stocks(tweet["text"])
             if not stocks:
@@ -124,18 +88,58 @@ async def main():
                 new_stocks=stocks,
             )
 
-            if success:
-                sent_count += 1
-
-            # 推文已处理，不再重复推送
             tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
 
-        logger.info(f"本轮推送 {sent_count} 篇推文")
+            if success:
+                logger.info(f"邮件已发送")
 
     except Exception as e:
-        logger.error(f"运行异常: {e}", exc_info=True)
+        logger.error(f"检查异常: {e}", exc_info=True)
+
+
+async def main():
+    smtp_cfg = get_smtp_config()
+    if not smtp_cfg.get("username") or not smtp_cfg.get("password"):
+        logger.error("未设置 SMTP_USER 或 SMTP_PASS 环境变量！")
         sys.exit(1)
 
+    recipients = load_recipients(os.path.join(BASE_DIR, "emails.txt"))
+    if not recipients:
+        logger.error("收件人列表为空")
+        sys.exit(1)
+
+    target_user = os.getenv("TARGET_USER", "aleabitoreddit")
+
+    scraper = TwitterScraper(
+        target_user=target_user,
+        proxy=os.getenv("TWITTER_PROXY", "").strip() or None,
+        auth_token=os.getenv("X_AUTH_TOKEN", ""),
+    )
+    tracker = StockTracker()
+    mailer = Mailer(smtp_cfg)
+
+    logger.info(f"🚀 监控启动 @{target_user} | 间隔={SLEEP_SECONDS}s | 最长运行={MAX_RUNTIME_SECONDS//3600}h")
+
+    start_time = datetime.now()
+
+    try:
+        iteration = 0
+        while True:
+            iteration += 1
+            elapsed = (datetime.now() - start_time).total_seconds()
+
+            logger.info(f"── 第 {iteration} 轮检查 (已运行 {int(elapsed // 60)}m) ──")
+            await run_check(scraper, tracker, mailer, recipients)
+
+            if elapsed >= MAX_RUNTIME_SECONDS:
+                logger.info(f"已达 {MAX_RUNTIME_SECONDS // 3600} 小时上限，正常退出等待 cron 重启")
+                break
+
+            logger.info(f"等待 {SLEEP_SECONDS // 60} 分钟...")
+            await asyncio.sleep(SLEEP_SECONDS)
+
+    except KeyboardInterrupt:
+        pass
     finally:
         await scraper.close()
 

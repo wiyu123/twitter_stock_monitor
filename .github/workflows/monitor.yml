@@ -2,20 +2,17 @@ name: 股票监控
 
 on:
   schedule:
-    # GitHub Actions cron 对 <1h 间隔可能延迟，多条偏移 cron 增加频率
-    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 * * * *'
-    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
-  workflow_dispatch:
+    - cron: '0 */2 * * *'        # 每 2 小时重启（保活）
+  workflow_dispatch:              # 手动触发
 
-# 防止同时跑两个实例
-concurrency: monitor-singleton
+concurrency: monitor
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 370          # 6 小时 + buffer
     permissions:
       contents: read
-    timeout-minutes: 3
 
     steps:
       - name: 检出代码
@@ -33,11 +30,10 @@ jobs:
         uses: actions/cache/restore@v4
         id: cache
         with:
-          path: |
-            seen_tweets.json
+          path: seen_tweets.json
           key: monitor-state-v3
 
-      - name: 运行监控
+      - name: 运行监控 (内循环 5min/次 × 6h)
         run: python github_main.py
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -52,6 +48,5 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: |
-            seen_tweets.json
+          path: seen_tweets.json
           key: monitor-state-v3
