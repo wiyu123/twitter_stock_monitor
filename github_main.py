@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import sys
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,6 +30,40 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 SLEEP_SECONDS = 300        # 5 分钟
 MAX_RUNTIME_SECONDS = 6 * 3600  # 6 小时 (GitHub Actions 单次上限)
+
+
+def _trigger_next_run():
+    """触发下一次 workflow_dispatch，实现无缝衔接"""
+    token = os.getenv("GH_TOKEN", "")
+    repo = os.getenv("GITHUB_REPOSITORY", "")
+    ref = os.getenv("GITHUB_REF_NAME", "main")
+    workflow_file = os.getenv("GITHUB_WORKFLOW_REF", "").split("@")[0]
+
+    if not token or not repo:
+        logger.warning("缺少 GH_TOKEN，无法自触发下一轮")
+        return
+
+    try:
+        # 用 GitHub Actions 内置的 GITHUB_TOKEN 调度新的 workflow_dispatch
+        # monitor.yml 的 workflow ID 通过文件名方式调用
+        url = f"https://api.github.com/repos/{repo}/actions/workflows/monitor.yml/dispatches"
+        result = subprocess.run(
+            [
+                "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                "-X", "POST",
+                "-H", "Accept: application/vnd.github+json",
+                "-H", f"Authorization: Bearer {token}",
+                url,
+                "-d", f'{{"ref":"{ref}"}}',
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if "20" in result.stdout:
+            logger.info("已触发下一轮，无缝衔接")
+        else:
+            logger.warning(f"触发下一轮失败: HTTP {result.stdout}")
+    except Exception as e:
+        logger.warning(f"触发下一轮异常: {e}")
 
 
 def get_smtp_config() -> dict:
@@ -132,7 +167,8 @@ async def main():
             await run_check(scraper, tracker, mailer, recipients)
 
             if elapsed >= MAX_RUNTIME_SECONDS:
-                logger.info(f"已达 {MAX_RUNTIME_SECONDS // 3600} 小时上限，正常退出等待 cron 重启")
+                logger.info(f"已达 {MAX_RUNTIME_SECONDS // 3600} 小时上限，触发下一轮后退出")
+                _trigger_next_run()
                 break
 
             logger.info(f"等待 {SLEEP_SECONDS // 60} 分钟...")
