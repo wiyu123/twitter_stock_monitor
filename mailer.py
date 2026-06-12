@@ -65,7 +65,7 @@ class Mailer:
 
         stock_codes = ", ".join([code for code, _ in new_stocks])
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        subject = f"[股神监控] 新标的提醒 - {stock_codes} - {now_str}"
+        subject = f"[股神监控] 新标的提醒 - {stock_codes} - {now_str} (不要回复！)"
 
         # 核心优化：翻译和HTML模板只在主线程构建一次
         translation = translate_text(tweet_text)
