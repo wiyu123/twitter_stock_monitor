@@ -1,6 +1,6 @@
 """
 邮件发送模块
-通过 SMTP 发送 HTML 格式的股票提醒邮件，附带中文翻译。
+通过 阿里云邮件推送 (SMTP) 发送 HTML 格式的股票提醒邮件，附带中文翻译。
 收件人由 emails.csv 管理 (email, expire_date 两列)。
 """
 
@@ -15,25 +15,17 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from datetime import datetime, date
-from threading import Lock
-from typing import List, Tuple
+from typing import List
 
 logger = logging.getLogger(__name__)
 
-MIN_EMAIL_INTERVAL = 3.0
-_last_send_time = 0.0
-
 
 def translate_text(text: str, target: str = "zh-CN") -> str:
-    """用 deep-translator (GoogleTranslate) 翻译文本为中文。
-
-    如果翻译失败，返回空字符串（邮件中不展示翻译区域）。
-    """
+    """用 deep-translator (GoogleTranslate) 翻译文本为中文。"""
     if not text or len(text.strip()) < 10:
         return ""
     try:
         from deep_translator import GoogleTranslator
-        # GoogleTranslator 无需 API key，但有频率限制
         result = GoogleTranslator(source="auto", target=target).translate(text)
         if result and result != text:
             return result.strip()
@@ -43,18 +35,16 @@ def translate_text(text: str, target: str = "zh-CN") -> str:
 
 
 class Mailer:
-    """邮件发送器"""
+    """邮件发送器 (专为阿里云邮件推送优化版)"""
 
     def __init__(self, config: dict):
-        self.host: str = config.get("host", "smtp.qq.com")
+        # 阿里云邮件推送默认地址
+        self.host: str = config.get("host", "smtpdm.aliyuncs.com")
         self.port: int = config.get("port", 465)
         self.use_ssl: bool = config.get("use_ssl", True)
-        self.username: str = config.get("username", "")
-        self.password: str = config.get("password", "")
+        self.username: str = config.get("username", "")  # 后台创建的发信地址
+        self.password: str = config.get("password", "")  # 自定义的 SMTP 密码
         self.from_name: str = config.get("from_name", "股票监控机器人")
-        self._send_lock = Lock()
-
-    # ── 公开接口 ──
 
     def send_stock_alert(
         self,
@@ -64,11 +54,7 @@ class Mailer:
         tweet_time: datetime,
         new_stocks: list,
     ) -> bool:
-        """并行发送邮件给多位收件人，线程池大小 1~50 自适应。
-
-        每个收件人独立连接、独立发送，互不阻塞。
-        线程池大小 = min(max(1, 收件人数 // 5), 50)。
-        """
+        """并行发送邮件给多位收件人。"""
         if not to_addrs:
             logger.warning("收件人列表为空，跳过发送")
             return False
@@ -79,21 +65,19 @@ class Mailer:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         subject = f"[股神监控] 新标的提醒 - {stock_codes} - {now_str}"
 
-        # 翻译 & HTML 构建只做一次（线程安全）
+        # 核心优化：翻译和HTML模板只在主线程构建一次
         translation = translate_text(tweet_text)
         html = self._build_html(tweet_text, tweet_url, tweet_time, new_stocks, translation)
 
         n = len(to_addrs)
-        # ── 线程池大小：每 5 人 1 线程，最少 1，最多 50 ──
-        pool_size = max(1, min(n // 5 + (1 if n % 5 else 0), 50))
+        # ── 优化：降低线程池上限。阿里云控制台 SMTP 推荐并发通常不超过 10~20 ──
+        pool_size = max(1, min(n // 5 + (1 if n % 5 else 0), 15))
         logger.info(f"开始并行发送 {n} 封邮件 (线程池: {pool_size})")
 
         success, fail = 0, 0
         with ThreadPoolExecutor(max_workers=pool_size) as executor:
             futures = {
-                executor.submit(
-                    self._send_one, addr, subject, html
-                ): addr
+                executor.submit(self._send_one, addr, subject, html): addr
                 for addr in to_addrs
             }
             for fut in as_completed(futures):
@@ -105,33 +89,32 @@ class Mailer:
                     else:
                         fail += 1
                 except Exception as e:
-                    logger.error(f"线程异常 ({addr}): {e}")
+                    logger.error(f"线程执行异常 ({addr}): {e}")
                     fail += 1
 
         logger.info(f"邮件发送完毕: 成功={success} 失败={fail}")
         return success > 0
 
-    # ── 内部实现 ──
-
     def _send_one(self, to_addr: str, subject: str, html: str) -> bool:
-        """单线程：构建一封邮件并发送给单个收件人（带重试）。"""
+        """单线程：构建一封邮件并发送给单个收件人（带退避重试机制）。"""
         msg = MIMEMultipart("alternative")
         msg["Subject"] = Header(subject, "utf-8")
-        msg["From"] = self.username
+
+        # ── 修复缺陷 1：必须严格采用 '别名 <邮箱>' 格式，否则阿里云直接拒信 ──
+        from_header = f"{Header(self.from_name, 'utf-8').encode()} <{self.username}>"
+        msg["From"] = from_header
         msg["To"] = to_addr
         msg.attach(MIMEText(html, "html", "utf-8"))
 
         for attempt in range(3):
             try:
                 if self.use_ssl:
-                    with smtplib.SMTP_SSL(
-                        self.host, self.port, timeout=30,
-                        context=ssl.create_default_context(),
-                    ) as server:
+                    context = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(self.host, self.port, timeout=15, context=context) as server:
                         server.login(self.username, self.password)
                         server.sendmail(self.username, [to_addr], msg.as_string())
                 else:
-                    with smtplib.SMTP(self.host, self.port, timeout=30) as server:
+                    with smtplib.SMTP(self.host, self.port, timeout=15) as server:
                         server.ehlo()
                         server.starttls(context=ssl.create_default_context())
                         server.ehlo()
@@ -142,26 +125,24 @@ class Mailer:
                 return True
 
             except smtplib.SMTPAuthenticationError:
-                logger.error(f"SMTP 认证失败: {to_addr}")
-                return False
+                logger.error(f"SMTP 认证失败，请检查密码: {to_addr}")
+                return False  # 密码错误无需重试
             except Exception as e:
                 err_msg = str(e)
-                wait = 30 + attempt * 30 if ("Too many" in err_msg or "limit" in err_msg.lower()) else 5
-                logger.warning(f"发送失败 {to_addr} ({err_msg[:50]})，{wait}s 后重试 ({attempt + 1}/3)")
+                # ── 优化：针对阿里云频控的指数退避重试 ──
+                if "too many" in err_msg.lower() or "limit" in err_msg.lower() or "421" in err_msg:
+                    wait = 5 * (attempt + 1)  # 频控时等待 5s, 10s
+                else:
+                    wait = 2
+
+                logger.warning(f"发送异常 {to_addr} ({err_msg[:40]})，{wait}s 后重试 ({attempt + 1}/3)")
                 if attempt < 2:
                     time.sleep(wait)
 
         logger.error(f"发送失败 (已重试3次): {to_addr}")
         return False
 
-    def _build_html(
-        self,
-        tweet_text: str,
-        tweet_url: str,
-        tweet_time: datetime,
-        new_stocks: list,
-        translation: str = "",
-    ) -> str:
+    def _build_html(self, tweet_text: str, tweet_url: str, tweet_time: datetime, new_stocks: list, translation: str = "") -> str:
         time_str = tweet_time.strftime("%Y-%m-%d %H:%M:%S") if tweet_time else "未知"
 
         stock_items = ""
@@ -181,7 +162,6 @@ class Mailer:
 
         safe_text = tweet_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # 翻译区块（只有翻译成功才显示）
         translation_block = ""
         if translation:
             safe_trans = translation.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -196,19 +176,16 @@ class Mailer:
 <head><meta charset="utf-8"></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;padding:20px;">
 <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;">
-
   <div style="background:linear-gradient(135deg,#1677ff,#0958d9);padding:20px 24px;color:#fff;">
     <h2 style="margin:0;font-size:20px;">🐂 白毛股神 serenity 发推提到新标的</h2>
     <p style="margin:6px 0 0;opacity:0.85;font-size:13px;">{time_str}</p>
   </div>
-
   <div style="padding:20px 24px;border-bottom:1px solid #f0f0f0;">
     <h3 style="margin:0 0 12px;color:#333;font-size:16px;">📊 发现的股票标的</h3>
     <ul style="padding-left:20px;margin:0;">
 {stock_items}
     </ul>
   </div>
-
   <div style="padding:20px 24px;">
     <h3 style="margin:0 0 10px;color:#333;font-size:16px;">📝 推文原文</h3>
     <blockquote style="margin:0;padding:14px 18px;background:#fafafa;border-left:4px solid #1677ff;border-radius:4px;line-height:1.7;color:#555;white-space:pre-wrap;word-break:break-word;">
@@ -221,11 +198,9 @@ class Mailer:
       </a>
     </p>
   </div>
-
   <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #f0f0f0;text-align:center;font-size:12px;color:#999;">
     股票监控机器人 | 生成于 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
   </div>
-
 </div>
 </body>
 </html>"""
@@ -233,18 +208,7 @@ class Mailer:
 
 
 def load_recipients(filepath: str) -> List[str]:
-    """从 CSV 文件加载收件人邮箱（去重 + 过滤过期）
-
-    CSV 格式:
-        email,expire_date
-        356487812@qq.com,2027-12-31
-
-    规则:
-      - 自动跳过空行和表头(第一列不是合法邮箱的行)
-      - 失效日期为空或超过今天的 → 加入列表
-      - 已过期 → 跳过
-      - 最终去重
-    """
+    """从 CSV 文件加载收件人邮箱（去重 + 过滤过期）。"""
     recipients = []
     if not os.path.exists(filepath):
         logger.error(f"收件人文件不存在: {filepath}")
@@ -252,6 +216,7 @@ def load_recipients(filepath: str) -> List[str]:
 
     today = date.today()
     try:
+        # utf-8-sig 能完美兼容 Windows Excel 编辑保存的 CSV 带来的 BOM 头
         with open(filepath, "r", encoding="utf-8-sig") as f:
             reader = csv.reader(f)
             for row in reader:
@@ -259,9 +224,8 @@ def load_recipients(filepath: str) -> List[str]:
                     continue
                 email = row[0].strip()
                 if "@" not in email:
-                    continue  # 跳过表头/注释行
+                    continue
 
-                # 失效日期 (可选)
                 expire_str = (row[1].strip() if len(row) > 1 else "").strip()
                 if expire_str:
                     try:
@@ -279,7 +243,6 @@ def load_recipients(filepath: str) -> List[str]:
         logger.error(f"读取收件人文件失败: {e}")
         return []
 
-    # 去重（保留首次出现的顺序）
     seen = set()
     unique = []
     for r in recipients:
@@ -288,5 +251,5 @@ def load_recipients(filepath: str) -> List[str]:
             seen.add(r_lower)
             unique.append(r)
 
-    logger.info(f"加载收件人 {len(unique)} 个: {unique}")
+    logger.info(f"成功加载有效收件人 {len(unique)} 个")
     return unique
