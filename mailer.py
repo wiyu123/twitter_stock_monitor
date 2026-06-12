@@ -4,6 +4,7 @@
 收件人由 emails.csv 管理 (email, expire_date 两列)。
 """
 
+import base64
 import csv
 import os
 import smtplib
@@ -11,6 +12,7 @@ import ssl
 import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from email.mime.image import MIMEImage
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
@@ -79,7 +81,7 @@ class Mailer:
         success, fail = 0, 0
         with ThreadPoolExecutor(max_workers=pool_size) as executor:
             futures = {
-                executor.submit(self._send_one, addr, subject, html): addr
+                executor.submit(self._send_one, addr, subject, html, images): addr
                 for addr in to_addrs
             }
             for fut in as_completed(futures):
@@ -97,16 +99,41 @@ class Mailer:
         logger.info(f"邮件发送完毕: 成功={success} 失败={fail}")
         return success > 0
 
-    def _send_one(self, to_addr: str, subject: str, html: str) -> bool:
-        """单线程：构建一封邮件并发送给单个收件人（带退避重试机制）。"""
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = Header(subject, "utf-8")
+    def _send_one(self, to_addr: str, subject: str, html: str, images: list = None) -> bool:
+        """单线程：发送单封邮件（支持 MIME CID 内嵌图片，手机端正常显示）。"""
+        images = images or []
 
-        # ── formataddr 自动处理中文别名 RFC 2047 编码 ──
-        from_header = formataddr((self.from_name, self.username))
-        msg["From"] = from_header
-        msg["To"] = to_addr
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        if images and any(img.get("data") for img in images):
+            # ── 有 base64 图片 → multipart/related + CID ──
+            msg = MIMEMultipart("related")
+            msg["Subject"] = Header(subject, "utf-8")
+            from_header = formataddr((self.from_name, self.username))
+            msg["From"] = from_header
+            msg["To"] = to_addr
+
+            # HTML 部分
+            alt = MIMEMultipart("alternative")
+            alt.attach(MIMEText(html, "html", "utf-8"))
+            msg.attach(alt)
+
+            # 每张图片用 CID 嵌入（HTML 中已有 cid:img0, cid:img1 ... 引用）
+            for i, img in enumerate(images):
+                data = img.get("data")
+                if not data:
+                    continue
+                img_bytes = base64.b64decode(data)
+                mime_img = MIMEImage(img_bytes, _subtype="jpeg")
+                mime_img.add_header("Content-ID", f"<img{i}>")
+                mime_img.add_header("Content-Disposition", "inline", filename=f"tweet_{i}.jpg")
+                msg.attach(mime_img)
+        else:
+            # ── 无图片 → 纯 HTML ──
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = Header(subject, "utf-8")
+            from_header = formataddr((self.from_name, self.username))
+            msg["From"] = from_header
+            msg["To"] = to_addr
+            msg.attach(MIMEText(html, "html", "utf-8"))
 
         for attempt in range(3):
             try:
@@ -165,16 +192,23 @@ class Mailer:
 
         safe_text = tweet_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-        # 推文图片
+        # 推文图片（优先用 base64 CID，手机端也能显示）
         image_block = ""
         if images:
             imgs = ""
-            for img in images:
+            for i, img in enumerate(images):
+                data = img.get("data")
                 url = img.get("url", "")
-                if url:
+                if data:
+                    # 同时写 CID + 外链 fallback
+                    imgs += (
+                        f'<img src="cid:img{i}" style="max-width:100%;margin:8px 0;border-radius:8px;" '
+                        f'alt="tweet image" />\n'
+                    )
+                elif url:
                     imgs += (
                         f'<img src="{url}" style="max-width:100%;margin:8px 0;border-radius:8px;" '
-                        f'alt="tweet image" loading="lazy" />\n'
+                        f'alt="tweet image" />\n'
                     )
             if imgs:
                 image_block = f"""

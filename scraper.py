@@ -4,6 +4,7 @@ X (Twitter) 推文抓取模块
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -297,7 +298,7 @@ class TwitterScraper:
 
                 if r.status_code == 200:
                     data = r.json()
-                    tweets = self._parse_timeline(data)
+                    tweets = await self._parse_timeline(data)
                     if tweets:
                         logger.info(f"通过 {query_name} 获取到 {len(tweets)} 条推文")
                         break
@@ -349,7 +350,7 @@ class TwitterScraper:
             result = data.get("data", {}).get("tweetResult", {}).get("result", {})
             if result.get("__typename") != "Tweet":
                 return None
-            tweet = self._parse_tweet_result(result)
+            tweet = await self._parse_tweet_result(result)
             if tweet:
                 # 只返回目标用户的推文
                 user_sn = self._extract_screen_name(result)
@@ -424,7 +425,7 @@ class TwitterScraper:
             logger.info(f"实时探测找到 {len(found)} 条新推文 (共检查 {checked} 个候选)")
         return found
 
-    def _parse_timeline(self, data: dict) -> list[dict]:
+    async def _parse_timeline(self, data: dict) -> list[dict]:
         """解析 GraphQL UserTweets 返回的时间线"""
         results = []
 
@@ -453,7 +454,7 @@ class TwitterScraper:
                     if not tweet_result or tweet_result.get("__typename") != "Tweet":
                         continue
 
-                    tweet = self._parse_tweet_result(tweet_result)
+                    tweet = await self._parse_tweet_result(tweet_result)
                     if tweet:
                         results.append(tweet)
 
@@ -462,7 +463,7 @@ class TwitterScraper:
 
         return results
 
-    def _parse_tweet_result(self, result: dict) -> Optional[dict]:
+    async def _parse_tweet_result(self, result: dict) -> Optional[dict]:
         """从单个 tweet result 中提取信息（含长文本 + 图片）"""
         try:
             tid = result.get("rest_id", "")
@@ -488,16 +489,25 @@ class TwitterScraper:
             created_str = legacy.get("created_at", "")
             created_at = _parse_twitter_time(created_str)
 
-            # ── 提取图片 ──
+            # ── 提取图片并下载为 base64 ──
             media_list = legacy.get("extended_entities", {}).get("media", [])
             images = []
             for m in media_list:
                 if m.get("type") == "photo":
-                    images.append({
-                        "url": m.get("media_url_https", ""),
-                        "width": m.get("original_info", {}).get("width", 0),
-                        "height": m.get("original_info", {}).get("height", 0),
-                    })
+                    url = m.get("media_url_https", "")
+                    if url:
+                        # 下载图片字节
+                        img_bytes = await self._download_image(url)
+                        if img_bytes:
+                            images.append({
+                                "data": base64.b64encode(img_bytes).decode("ascii"),
+                                "mime": "image/jpeg",
+                                "width": m.get("original_info", {}).get("width", 0),
+                                "height": m.get("original_info", {}).get("height", 0),
+                            })
+                        else:
+                            # 下载失败 fallback 仍然存 URL
+                            images.append({"url": url})
 
             # 获取用户名用于 URL
             core = result.get("core", {})
@@ -516,6 +526,17 @@ class TwitterScraper:
         except Exception as e:
             logger.debug(f"解析 tweet result 失败: {e}")
             return None
+
+    async def _download_image(self, url: str) -> Optional[bytes]:
+        """下载图片（通过同一客户端，利用代理和 cookie）"""
+        client = self._get_client()
+        try:
+            r = await client.get(url)
+            if r.status_code == 200 and len(r.content) > 1024:
+                return r.content
+        except Exception:
+            pass
+        return None
 
     async def close(self):
         """关闭 HTTP 客户端"""
