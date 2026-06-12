@@ -39,8 +39,8 @@ class Mailer:
     """邮件发送器 (专为阿里云邮件推送优化版)"""
 
     def __init__(self, config: dict):
-        # 阿里云邮件推送默认地址 (美国节点，GitHub Actions 可用)
-        self.host: str = config.get("host", "smtpdm-us-east-1.aliyuncs.com")
+        # 阿里云邮件推送默认地址
+        self.host: str = config.get("host", "smtpdm.aliyun.com")
         self.port: int = config.get("port", 465)
         self.use_ssl: bool = config.get("use_ssl", True)
         self.username: str = config.get("username", "")  # 后台创建的发信地址
