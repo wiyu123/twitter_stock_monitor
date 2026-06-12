@@ -11,6 +11,7 @@ import os
 import sys
 import subprocess
 from datetime import datetime, timedelta, timezone
+from typing import List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -64,6 +65,45 @@ def _trigger_next_run():
             logger.warning(f"触发下一轮失败: HTTP {result.stdout}")
     except Exception as e:
         logger.warning(f"触发下一轮异常: {e}")
+
+
+def _load_recipients_live() -> List[str]:
+    """从 GitHub raw URL 获取最新 emails.csv，失败时fallback到本地文件。
+
+    公开仓库无需认证，直接走 HTTPS。不在中国所以不走代理。
+    每 5 分钟调用一次，这样你在 GitHub 上修改 emails.csv 后
+    下次检查周期自动生效，不需要重启 Action。
+    """
+    repo = os.getenv("GITHUB_REPOSITORY", "wiyu123/twitter_stock_monitor")
+    ref = os.getenv("GITHUB_REF_NAME", "main")
+    url = f"https://raw.githubusercontent.com/{repo}/{ref}/emails.csv"
+
+    try:
+        import urllib.request
+        import tempfile
+        req = urllib.request.Request(url, headers={"User-Agent": "stock-monitor/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                data = resp.read().decode("utf-8-sig")
+                # 写到临时文件再用 load_recipients 解析
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".csv", delete=False, encoding="utf-8"
+                ) as tmp:
+                    tmp.write(data)
+                    tmp_path = tmp.name
+                result = load_recipients(tmp_path)
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                if result:
+                    logger.info(f"从 GitHub 加载最新收件人: {len(result)} 人")
+                    return result
+    except Exception as e:
+        logger.debug(f"GitHub raw 拉取失败: {e}，回退到本地文件")
+
+    # Fallback: 本地 CSV
+    return load_recipients(os.path.join(BASE_DIR, "emails.csv"))
 
 
 def get_smtp_config() -> dict:
@@ -138,7 +178,8 @@ async def main():
         logger.error("未设置 SMTP_USER 或 SMTP_PASS 环境变量！")
         sys.exit(1)
 
-    recipients = load_recipients(os.path.join(BASE_DIR, "emails.csv"))
+    # 初始加载
+    recipients = _load_recipients_live()
     if not recipients:
         logger.error("收件人列表为空")
         sys.exit(1)
@@ -164,6 +205,12 @@ async def main():
             elapsed = (datetime.now() - start_time).total_seconds()
 
             logger.info(f"── 第 {iteration} 轮检查 (已运行 {int(elapsed // 60)}m) ──")
+            # 每轮重新拉取收件人，GitHub 上改 emails.csv 后 5 分钟内生效
+            recipients = _load_recipients_live()
+            if not recipients:
+                logger.warning("收件人列表为空，跳过本轮")
+                await asyncio.sleep(SLEEP_SECONDS)
+                continue
             await run_check(scraper, tracker, mailer, recipients)
 
             if elapsed >= MAX_RUNTIME_SECONDS:
