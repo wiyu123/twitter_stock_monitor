@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
+from email.utils import formataddr
 from datetime import datetime, date
 from typing import List
 
@@ -100,8 +101,8 @@ class Mailer:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = Header(subject, "utf-8")
 
-        # ── 修复缺陷 1：必须严格采用 '别名 <邮箱>' 格式，否则阿里云直接拒信 ──
-        from_header = f"{Header(self.from_name, 'utf-8').encode()} <{self.username}>"
+        # ── formataddr 自动处理中文别名 RFC 2047 编码 ──
+        from_header = formataddr((self.from_name, self.username))
         msg["From"] = from_header
         msg["To"] = to_addr
         msg.attach(MIMEText(html, "html", "utf-8"))
