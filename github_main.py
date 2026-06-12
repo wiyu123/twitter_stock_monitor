@@ -149,18 +149,16 @@ async def run_check(scraper, tracker, mailer, recipients):
 
         for tweet in new_tweets:
             stocks = extract_stocks(tweet["text"])
-            if not stocks:
-                tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
-                continue
 
-            logger.info(f"新标的! 推文 {tweet['id']}: {[(c, m) for c, m in stocks]}")
+            label = f"{[(c, m) for c, m in stocks]}" if stocks else "无股票标的"
+            logger.info(f"新推文! {tweet['id']}: {label}")
 
-            success = mailer.send_stock_alert(
+            success = mailer.send_tweet_alert(
                 to_addrs=recipients,
                 tweet_text=tweet["text"],
                 tweet_url=tweet["url"],
                 tweet_time=tweet["created_at"],
-                new_stocks=stocks,
+                stocks=stocks or [],
                 images=tweet.get("images", []),
             )
 

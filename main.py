@@ -131,12 +131,12 @@ class Monitor:
                 )
 
                 # 发送邮件
-                success = self.mailer.send_stock_alert(
+                success = self.mailer.send_tweet_alert(
                     to_addrs=self.recipients,
                     tweet_text=tweet_text,
                     tweet_url=tweet_url,
                     tweet_time=tweet_time,
-                    new_stocks=new_stocks,
+                    stocks=new_stocks,
                     images=tweet.get("images", []),
                 )
 

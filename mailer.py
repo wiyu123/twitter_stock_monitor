@@ -49,29 +49,29 @@ class Mailer:
         self.password: str = config.get("password", "")  # 自定义的 SMTP 密码
         self.from_name: str = config.get("from_name", "股票监控机器人")
 
-    def send_stock_alert(
+    def send_tweet_alert(
         self,
         to_addrs: List[str],
         tweet_text: str,
         tweet_url: str,
         tweet_time: datetime,
-        new_stocks: list,
+        stocks: list,
         images: list = None,
     ) -> bool:
-        """并行发送邮件给多位收件人。"""
+        """并行发送邮件给多位收件人（有/无股票标的都发）。"""
         if not to_addrs:
             logger.warning("收件人列表为空，跳过发送")
             return False
-        if not new_stocks:
-            return False
 
-        stock_codes = ", ".join([code for code, _ in new_stocks])
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        subject = f"[股神监控] 新标的提醒 - {stock_codes} - {now_str} (不要回复！)"
+        if stocks:
+            codes = ", ".join([c for c, _ in stocks])
+            subject = f"[股神监控] 新标的提醒 - {codes} - {now_str} (不要回复！)"
+        else:
+            subject = f"[股神监控] 新推文提醒 - {now_str} (不要回复！)"
 
-        # 核心优化：翻译和HTML模板只在主线程构建一次
         translation = translate_text(tweet_text)
-        html = self._build_html(tweet_text, tweet_url, tweet_time, new_stocks, translation, images or [])
+        html = self._build_html(tweet_text, tweet_url, tweet_time, stocks, translation, images or [])
 
         n = len(to_addrs)
         # ── 优化：降低线程池上限。阿里云控制台 SMTP 推荐并发通常不超过 10~20 ──
@@ -172,23 +172,36 @@ class Mailer:
         return False
 
     def _build_html(self, tweet_text: str, tweet_url: str, tweet_time: datetime,
-                    new_stocks: list, translation: str = "", images: list = None) -> str:
+                    stocks: list, translation: str = "", images: list = None) -> str:
         time_str = tweet_time.strftime("%Y-%m-%d %H:%M:%S") if tweet_time else "未知"
 
-        stock_items = ""
-        market_emoji = {
-            "A股(上海主板)": "🏛️", "A股(深圳主板)": "🏛️",
-            "A股(创业板)": "🔬", "A股(科创板)": "🚀",
-            "港股": "🇭🇰", "美股": "🇺🇸",
-        }
-        for code, market in new_stocks:
-            emoji = market_emoji.get(market, "📌")
-            stock_items += (
-                f'<li style="margin:6px 0;">'
-                f'<span style="font-size:16px;">{emoji} '
-                f'<strong style="color:#d4380d;">{code}</strong></span> '
-                f'<span style="color:#888;">({market})</span></li>\n'
-            )
+        # 标题和标的区
+        if stocks:
+            header_title = "🐂 白毛股神 serenity 发推提到新标的"
+            stock_items = ""
+            market_emoji = {
+                "A股(上海主板)": "🏛️", "A股(深圳主板)": "🏛️",
+                "A股(创业板)": "🔬", "A股(科创板)": "🚀",
+                "港股": "🇭🇰", "美股": "🇺🇸",
+            }
+            for code, market in stocks:
+                emoji = market_emoji.get(market, "📌")
+                stock_items += (
+                    f'<li style="margin:6px 0;">'
+                    f'<span style="font-size:16px;">{emoji} '
+                    f'<strong style="color:#d4380d;">{code}</strong></span> '
+                    f'<span style="color:#888;">({market})</span></li>\n'
+                )
+            stock_block = f"""
+  <div style="padding:20px 24px;border-bottom:1px solid #f0f0f0;">
+    <h3 style="margin:0 0 12px;color:#333;font-size:16px;">📊 发现的股票标的</h3>
+    <ul style="padding-left:20px;margin:0;">
+{stock_items}
+    </ul>
+  </div>"""
+        else:
+            header_title = "🐂 白毛股神 serenity 发了新推文"
+            stock_block = ""
 
         safe_text = tweet_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -232,15 +245,10 @@ class Mailer:
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;padding:20px;">
 <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.08);overflow:hidden;">
   <div style="background:linear-gradient(135deg,#1677ff,#0958d9);padding:20px 24px;color:#fff;">
-    <h2 style="margin:0;font-size:20px;">🐂 白毛股神 serenity 发推提到新标的</h2>
+    <h2 style="margin:0;font-size:20px;">{header_title}</h2>
     <p style="margin:6px 0 0;opacity:0.85;font-size:13px;">{time_str}</p>
   </div>
-  <div style="padding:20px 24px;border-bottom:1px solid #f0f0f0;">
-    <h3 style="margin:0 0 12px;color:#333;font-size:16px;">📊 发现的股票标的</h3>
-    <ul style="padding-left:20px;margin:0;">
-{stock_items}
-    </ul>
-  </div>
+  {stock_block}
   <div style="padding:20px 24px;">
     <h3 style="margin:0 0 10px;color:#333;font-size:16px;">📝 推文原文</h3>
     <blockquote style="margin:0;padding:14px 18px;background:#fafafa;border-left:4px solid #1677ff;border-radius:4px;line-height:1.7;color:#555;white-space:pre-wrap;word-break:break-word;">
