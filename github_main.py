@@ -161,6 +161,7 @@ async def run_check(scraper, tracker, mailer, recipients):
                 tweet_url=tweet["url"],
                 tweet_time=tweet["created_at"],
                 new_stocks=stocks,
+                images=tweet.get("images", []),
             )
 
             tracker.mark_tweet_done(tweet["id"], tweet["created_at"])

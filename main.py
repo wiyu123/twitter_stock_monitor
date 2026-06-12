@@ -137,6 +137,7 @@ class Monitor:
                     tweet_url=tweet_url,
                     tweet_time=tweet_time,
                     new_stocks=new_stocks,
+                    images=tweet.get("images", []),
                 )
 
                 if success:

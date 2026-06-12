@@ -463,7 +463,7 @@ class TwitterScraper:
         return results
 
     def _parse_tweet_result(self, result: dict) -> Optional[dict]:
-        """从单个 tweet result 中提取信息"""
+        """从单个 tweet result 中提取信息（含长文本 + 图片）"""
         try:
             tid = result.get("rest_id", "")
             if not tid:
@@ -471,12 +471,33 @@ class TwitterScraper:
 
             legacy = result.get("legacy", {})
             text = legacy.get("full_text", "")
-            created_str = legacy.get("created_at", "")
+
+            # ── 长推文：note_tweet 里有完整文本（X Premium 长文功能）──
+            note = (
+                result.get("note_tweet", {})
+                .get("note_tweet_results", {})
+                .get("result", {})
+            )
+            note_text = note.get("text", "") if note else ""
+            if note_text:
+                text = note_text  # 用完整文本替换截断版
 
             if not text:
                 return None
 
+            created_str = legacy.get("created_at", "")
             created_at = _parse_twitter_time(created_str)
+
+            # ── 提取图片 ──
+            media_list = legacy.get("extended_entities", {}).get("media", [])
+            images = []
+            for m in media_list:
+                if m.get("type") == "photo":
+                    images.append({
+                        "url": m.get("media_url_https", ""),
+                        "width": m.get("original_info", {}).get("width", 0),
+                        "height": m.get("original_info", {}).get("height", 0),
+                    })
 
             # 获取用户名用于 URL
             core = result.get("core", {})
@@ -490,6 +511,7 @@ class TwitterScraper:
                 "text": text,
                 "created_at": created_at,
                 "url": f"https://x.com/{screen_name}/status/{tid}",
+                "images": images,
             }
         except Exception as e:
             logger.debug(f"解析 tweet result 失败: {e}")

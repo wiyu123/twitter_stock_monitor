@@ -54,6 +54,7 @@ class Mailer:
         tweet_url: str,
         tweet_time: datetime,
         new_stocks: list,
+        images: list = None,
     ) -> bool:
         """并行发送邮件给多位收件人。"""
         if not to_addrs:
@@ -68,7 +69,7 @@ class Mailer:
 
         # 核心优化：翻译和HTML模板只在主线程构建一次
         translation = translate_text(tweet_text)
-        html = self._build_html(tweet_text, tweet_url, tweet_time, new_stocks, translation)
+        html = self._build_html(tweet_text, tweet_url, tweet_time, new_stocks, translation, images or [])
 
         n = len(to_addrs)
         # ── 优化：降低线程池上限。阿里云控制台 SMTP 推荐并发通常不超过 10~20 ──
@@ -143,7 +144,8 @@ class Mailer:
         logger.error(f"发送失败 (已重试3次): {to_addr}")
         return False
 
-    def _build_html(self, tweet_text: str, tweet_url: str, tweet_time: datetime, new_stocks: list, translation: str = "") -> str:
+    def _build_html(self, tweet_text: str, tweet_url: str, tweet_time: datetime,
+                    new_stocks: list, translation: str = "", images: list = None) -> str:
         time_str = tweet_time.strftime("%Y-%m-%d %H:%M:%S") if tweet_time else "未知"
 
         stock_items = ""
@@ -162,6 +164,24 @@ class Mailer:
             )
 
         safe_text = tweet_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        # 推文图片
+        image_block = ""
+        if images:
+            imgs = ""
+            for img in images:
+                url = img.get("url", "")
+                if url:
+                    imgs += (
+                        f'<img src="{url}" style="max-width:100%;margin:8px 0;border-radius:8px;" '
+                        f'alt="tweet image" loading="lazy" />\n'
+                    )
+            if imgs:
+                image_block = f"""
+          <div style="margin-top:12px;">
+            <div style="font-size:11px;color:#999;margin-bottom:4px;">📷 推文附图</div>
+            {imgs}
+          </div>"""
 
         translation_block = ""
         if translation:
@@ -192,6 +212,7 @@ class Mailer:
     <blockquote style="margin:0;padding:14px 18px;background:#fafafa;border-left:4px solid #1677ff;border-radius:4px;line-height:1.7;color:#555;white-space:pre-wrap;word-break:break-word;">
 {safe_text}
     </blockquote>
+    {image_block}
     {translation_block}
     <p style="margin-top:14px;">
       <a href="{tweet_url}" style="color:#1677ff;text-decoration:none;font-size:13px;" target="_blank">
