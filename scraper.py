@@ -483,6 +483,9 @@ class TwitterScraper:
             if note_text:
                 text = note_text  # 用完整文本替换截断版
 
+            # ── 去尾：移除推文末尾附加的 t.co 短链接（图片/视频/链接卡）──
+            text = re.sub(r'\s*https://t\.co/\w{5,20}$', '', text.strip())
+
             if not text:
                 return None
 
