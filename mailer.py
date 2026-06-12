@@ -10,11 +10,13 @@ import smtplib
 import ssl
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import Header
 from datetime import datetime, date
-from typing import List
+from threading import Lock
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,9 @@ class Mailer:
         self.username: str = config.get("username", "")
         self.password: str = config.get("password", "")
         self.from_name: str = config.get("from_name", "股票监控机器人")
+        self._send_lock = Lock()
+
+    # ── 公开接口 ──
 
     def send_stock_alert(
         self,
@@ -59,6 +64,11 @@ class Mailer:
         tweet_time: datetime,
         new_stocks: list,
     ) -> bool:
+        """并行发送邮件给多位收件人，线程池大小 1~50 自适应。
+
+        每个收件人独立连接、独立发送，互不阻塞。
+        线程池大小 = min(max(1, 收件人数 // 5), 50)。
+        """
         if not to_addrs:
             logger.warning("收件人列表为空，跳过发送")
             return False
@@ -69,23 +79,48 @@ class Mailer:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         subject = f"[股神监控] 新标的提醒 - {stock_codes} - {now_str}"
 
-        # 翻译
+        # 翻译 & HTML 构建只做一次（线程安全）
         translation = translate_text(tweet_text)
-
         html = self._build_html(tweet_text, tweet_url, tweet_time, new_stocks, translation)
 
-        global _last_send_time
-        elapsed = time.time() - _last_send_time
-        if elapsed < MIN_EMAIL_INTERVAL:
-            time.sleep(MIN_EMAIL_INTERVAL - elapsed)
+        n = len(to_addrs)
+        # ── 线程池大小：每 5 人 1 线程，最少 1，最多 50 ──
+        pool_size = max(1, min(n // 5 + (1 if n % 5 else 0), 50))
+        logger.info(f"开始并行发送 {n} 封邮件 (线程池: {pool_size})")
 
+        success, fail = 0, 0
+        with ThreadPoolExecutor(max_workers=pool_size) as executor:
+            futures = {
+                executor.submit(
+                    self._send_one, addr, subject, html
+                ): addr
+                for addr in to_addrs
+            }
+            for fut in as_completed(futures):
+                addr = futures[fut]
+                try:
+                    ok = fut.result()
+                    if ok:
+                        success += 1
+                    else:
+                        fail += 1
+                except Exception as e:
+                    logger.error(f"线程异常 ({addr}): {e}")
+                    fail += 1
+
+        logger.info(f"邮件发送完毕: 成功={success} 失败={fail}")
+        return success > 0
+
+    # ── 内部实现 ──
+
+    def _send_one(self, to_addr: str, subject: str, html: str) -> bool:
+        """单线程：构建一封邮件并发送给单个收件人（带重试）。"""
         msg = MIMEMultipart("alternative")
         msg["Subject"] = Header(subject, "utf-8")
         msg["From"] = self.username
-        msg["To"] = ", ".join(to_addrs)
+        msg["To"] = to_addr
         msg.attach(MIMEText(html, "html", "utf-8"))
 
-        last_error = None
         for attempt in range(3):
             try:
                 if self.use_ssl:
@@ -94,32 +129,29 @@ class Mailer:
                         context=ssl.create_default_context(),
                     ) as server:
                         server.login(self.username, self.password)
-                        server.sendmail(self.username, to_addrs, msg.as_string())
+                        server.sendmail(self.username, [to_addr], msg.as_string())
                 else:
                     with smtplib.SMTP(self.host, self.port, timeout=30) as server:
                         server.ehlo()
                         server.starttls(context=ssl.create_default_context())
                         server.ehlo()
                         server.login(self.username, self.password)
-                        server.sendmail(self.username, to_addrs, msg.as_string())
+                        server.sendmail(self.username, [to_addr], msg.as_string())
 
-                _last_send_time = time.time()
-                logger.info(f"邮件已发送 → {', '.join(to_addrs)} | 标的: {stock_codes}")
+                logger.info(f"已发送 → {to_addr}")
                 return True
 
-            except smtplib.SMTPAuthenticationError as e:
-                logger.error(f"SMTP 认证失败: {e}")
+            except smtplib.SMTPAuthenticationError:
+                logger.error(f"SMTP 认证失败: {to_addr}")
                 return False
             except Exception as e:
-                last_error = e
                 err_msg = str(e)
                 wait = 30 + attempt * 30 if ("Too many" in err_msg or "limit" in err_msg.lower()) else 5
-                logger.warning(f"发送失败 ({err_msg[:60]})，{wait}s 后重试 (attempt {attempt + 1}/3)")
+                logger.warning(f"发送失败 {to_addr} ({err_msg[:50]})，{wait}s 后重试 ({attempt + 1}/3)")
                 if attempt < 2:
                     time.sleep(wait)
 
-        logger.error(f"邮件发送失败 (已重试3次): {last_error}")
-        _last_send_time = time.time()
+        logger.error(f"发送失败 (已重试3次): {to_addr}")
         return False
 
     def _build_html(
