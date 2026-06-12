@@ -66,7 +66,7 @@ class Mailer:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         if stocks:
             codes = ", ".join([c for c, _ in stocks])
-            subject = f"[股神监控] 新标的提醒 - {codes} - {now_str} (不要回复！)"
+            subject = f"[股神监控] 新推文相关标的提醒 - {codes} - {now_str} (不要回复！)"
         else:
             subject = f"[股神监控] 新推文提醒 - {now_str} (不要回复！)"
 
@@ -177,7 +177,7 @@ class Mailer:
 
         # 标题和标的区
         if stocks:
-            header_title = "🐂 白毛股神 serenity 发推提到新标的"
+            header_title = "🐂 白毛股神 serenity 发推提到的标的"
             stock_items = ""
             market_emoji = {
                 "A股(上海主板)": "🏛️", "A股(深圳主板)": "🏛️",
