@@ -66,9 +66,9 @@ class Mailer:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         if stocks:
             codes = ", ".join([c for c, _ in stocks])
-            subject = f"[股神监控] 新推文相关标的提醒 - {codes} - {now_str} (不要回复！)"
+            subject = f"[Serenity白毛女] 新推文相关标的提醒 - {codes} - {now_str} (不要回复！)"
         else:
-            subject = f"[股神监控] 新推文提醒 - {now_str} (不要回复！)"
+            subject = f"[Serenity白毛女] 新推文提醒 - {now_str} (不要回复！)"
 
         translation = translate_text(tweet_text)
         html = self._build_html(tweet_text, tweet_url, tweet_time, stocks, translation, images or [])
@@ -177,7 +177,7 @@ class Mailer:
 
         # 标题和标的区
         if stocks:
-            header_title = "🐂 白毛股神 serenity 发推提到的标的"
+            header_title = "🐂 白毛女 serenity 发推提到的标的"
             stock_items = ""
             market_emoji = {
                 "A股(上海主板)": "🏛️", "A股(深圳主板)": "🏛️",
@@ -194,13 +194,13 @@ class Mailer:
                 )
             stock_block = f"""
   <div style="padding:20px 24px;border-bottom:1px solid #f0f0f0;">
-    <h3 style="margin:0 0 12px;color:#333;font-size:16px;">📊 发现的股票标的</h3>
+    <h3 style="margin:0 0 12px;color:#333;font-size:16px;">📊 发现的相关标的</h3>
     <ul style="padding-left:20px;margin:0;">
 {stock_items}
     </ul>
   </div>"""
         else:
-            header_title = "🐂 白毛股神 serenity 发了新推文"
+            header_title = "🐂 白毛女 serenity 发了新推文"
             stock_block = ""
 
         safe_text = tweet_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -263,7 +263,7 @@ class Mailer:
     </p>
   </div>
   <div style="padding:14px 24px;background:#fafafa;border-top:1px solid #f0f0f0;text-align:center;font-size:12px;color:#999;">
-    股票监控机器人 | 生成于 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    Serenity提醒机器人 | 生成于 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
   </div>
 </div>
 </body>
