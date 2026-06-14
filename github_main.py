@@ -27,7 +27,7 @@ logger = logging.getLogger("github-monitor")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SLEEP_SECONDS = 300                # 5 分钟
+SLEEP_SECONDS = 180                # 3 分钟
 MAX_RUNTIME_SECONDS = 110 * 60     # 110 分钟，cron 2h 前退出防重叠
 
 
