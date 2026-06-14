@@ -5,15 +5,12 @@ on:
     - cron: '0 */2 * * *'        # 每 2 小时重启（保活）
   workflow_dispatch:              # 手动触发
 
-concurrency: monitor
-
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 370          # 6 小时 + buffer
+    timeout-minutes: 120          # 2 小时
     permissions:
       contents: read
-      actions: write      # 允许自触发 workflow_dispatch
 
     steps:
       - name: 检出代码
@@ -34,7 +31,7 @@ jobs:
           path: seen_tweets.json
           key: monitor-state-v3
 
-      - name: 运行监控 (内循环 5min/次 × 6h)
+      - name: 运行监控 (5min/次 × 110min)
         run: python github_main.py
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -44,9 +41,6 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           TARGET_USER: ${{ vars.TARGET_USER || 'aleabitoreddit' }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
 
       - name: 保存通知记录
         uses: actions/cache/save@v4
