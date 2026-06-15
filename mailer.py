@@ -47,7 +47,7 @@ class Mailer:
         self.use_ssl: bool = config.get("use_ssl", True)
         self.username: str = config.get("username", "")  # 后台创建的发信地址
         self.password: str = config.get("password", "")  # 自定义的 SMTP 密码
-        self.from_name: str = config.get("from_name", "股票监控机器人")
+        self.from_name: str = config.get("from_name", "Serenity提醒机器人")
 
     def send_tweet_alert(
         self,
