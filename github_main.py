@@ -61,7 +61,7 @@ def get_smtp_config() -> dict:
         "use_ssl": os.getenv("SMTP_SSL", "true").lower() == "true",
         "username": os.getenv("SMTP_USER", ""),
         "password": os.getenv("SMTP_PASS", ""),
-        "from_name": "股票监控机器人",
+        "from_name": "Serenity提醒机器人",
     }
 
 
