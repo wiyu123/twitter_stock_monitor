@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-GitHub Actions 版入口 — 长运行模式。
-每 170 秒检查一次，最多 350 分钟后正常退出。
-自触发由 workflow 在 cache save 后完成，无竞态。
+GitHub Actions 版入口 — 长运行循环。
+内部 while True + sleep(180s) 循环，约 350 分钟后退出。
+cron 每 4 小时保底重启。不依赖自触发，无竞态风险。
 """
 
 import asyncio
@@ -28,8 +28,8 @@ logger = logging.getLogger("github-monitor")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-SLEEP_SECONDS = 180
-MAX_RUNTIME_SECONDS = 350 * 60  # 350 分钟，远小于 6h 上限
+CHECK_INTERVAL = 180          # 3 分钟
+MAX_RUNTIME = 350 * 60        # 350 分钟，< 6h 上限
 
 
 def _load_recipients_live() -> List[str]:
@@ -68,7 +68,7 @@ def get_smtp_config() -> dict:
 async def main():
     smtp_cfg = get_smtp_config()
     if not smtp_cfg.get("username") or not smtp_cfg.get("password"):
-        logger.error("未设置 SMTP_USER 或 SMTP_PASS！")
+        logger.error("未设置 SMTP 环境变量！")
         sys.exit(1)
 
     recipients = _load_recipients_live()
@@ -84,50 +84,51 @@ async def main():
     tracker = StockTracker()
     mailer = Mailer(smtp_cfg)
 
-    logger.info(f"🚀 监控启动 | 间隔={SLEEP_SECONDS}s | 最长={MAX_RUNTIME_SECONDS // 60}m")
+    logger.info(f"🚀 启动 | 间隔={CHECK_INTERVAL}s | 最长={MAX_RUNTIME // 60}m | @{os.getenv('TARGET_USER', 'aleabitoreddit')}")
 
-    start_time = datetime.now()
+    start = datetime.now()
 
     try:
         iteration = 0
         while True:
             iteration += 1
-            elapsed = (datetime.now() - start_time).total_seconds()
+            elapsed = (datetime.now() - start).total_seconds()
             logger.info(f"── 第 {iteration} 轮 (已运行 {int(elapsed // 60)}m) ──")
 
+            # 每轮刷新收件人列表
             recipients = _load_recipients_live()
             if not recipients:
-                logger.warning("收件人为空，跳过")
-                await asyncio.sleep(SLEEP_SECONDS)
-                continue
+                logger.warning("收件人为空，跳过本轮")
+            else:
+                try:
+                    tweets = await scraper.get_recent_tweets(count=10)
+                    if tweets:
+                        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+                        recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+                        new_tweets = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
+                        if new_tweets:
+                            logger.info(f"发现 {len(new_tweets)} 篇新推文")
+                            for tweet in new_tweets:
+                                stocks = extract_stocks(tweet["text"])
+                                label = f"{[(c,m) for c,m in stocks]}" if stocks else "无标的"
+                                logger.info(f"推送: {tweet['id']} {label}")
+                                mailer.send_tweet_alert(
+                                    to_addrs=recipients,
+                                    tweet_text=tweet["text"],
+                                    tweet_url=tweet["url"],
+                                    tweet_time=tweet["created_at"],
+                                    stocks=stocks or [],
+                                    images=tweet.get("images", []),
+                                )
+                                tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
+                except Exception as e:
+                    logger.error(f"检查异常: {e}", exc_info=True)
 
-            try:
-                tweets = await scraper.get_recent_tweets(count=10)
-                if tweets:
-                    one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
-                    recent = [t for t in tweets if t["created_at"] and t["created_at"] >= one_hour_ago]
-                    new_tweets = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
-                    if new_tweets:
-                        logger.info(f"发现 {len(new_tweets)} 篇新推文")
-                        for tweet in new_tweets:
-                            stocks = extract_stocks(tweet["text"])
-                            mailer.send_tweet_alert(
-                                to_addrs=recipients,
-                                tweet_text=tweet["text"],
-                                tweet_url=tweet["url"],
-                                tweet_time=tweet["created_at"],
-                                stocks=stocks or [],
-                                images=tweet.get("images", []),
-                            )
-                            tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
-            except Exception as e:
-                logger.error(f"检查异常: {e}", exc_info=True)
-
-            if elapsed >= MAX_RUNTIME_SECONDS:
-                logger.info(f"已达 {MAX_RUNTIME_SECONDS // 60}m 上限，正常退出（自触发由 workflow 接管）")
+            if elapsed >= MAX_RUNTIME:
+                logger.info(f"已达 {MAX_RUNTIME // 60}m 上限，正常退出")
                 break
 
-            await asyncio.sleep(SLEEP_SECONDS)
+            await asyncio.sleep(CHECK_INTERVAL)
 
     except KeyboardInterrupt:
         pass
