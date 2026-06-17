@@ -105,6 +105,10 @@ async def main():
                     if tweets:
                         cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
                         recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+                        # 调试：打印所有1h内的推文ID和去重判断
+                        for t in recent:
+                            already = tracker.is_tweet_processed(t["id"])
+                            logger.info(f"  {'跳过' if already else '新→'} [{t['id']}] {(t.get('created_at') or '?').strftime('%H:%M') if t.get('created_at') else '?'} | {t['text'][:60]}...")
                         new_tweets = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
                         if new_tweets:
                             logger.info(f"发现 {len(new_tweets)} 篇新推文")

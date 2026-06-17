@@ -32,7 +32,7 @@ jobs:
         id: cache
         with:
           path: seen_tweets.json
-          key: monitor-state-v3
+          key: monitor-state-v4
 
       - name: 运行监控 (3min/次 × ~350min)
         run: python github_main.py
@@ -50,4 +50,4 @@ jobs:
         if: always()
         with:
           path: seen_tweets.json
-          key: monitor-state-v3
+          key: monitor-state-v4
