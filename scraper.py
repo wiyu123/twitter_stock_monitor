@@ -316,6 +316,18 @@ class TwitterScraper:
             if len(tweets) > count:
                 tweets.sort(key=lambda t: int(t.get("id", "0")), reverse=True)
                 tweets = tweets[:count]
+
+            # ── 补充：UserTweets 有 CDN 缓存延迟，用 TweetResultByRestId 兜底 ──
+            speculative = await self._speculative_fetch(tweets)
+            if speculative:
+                seen = {t["id"] for t in tweets}
+                for st in speculative:
+                    if st["id"] not in seen:
+                        tweets.append(st)
+                        seen.add(st["id"])
+                tweets.sort(key=lambda t: int(t["id"]), reverse=True)
+                tweets = tweets[:count]
+
             logger.info(f"获取到 @{self.target_user} 最近 {len(tweets)} 条推文")
         else:
             logger.warning(f"未获取到 @{self.target_user} 的推文")
@@ -359,6 +371,34 @@ class TwitterScraper:
             return None
         except Exception:
             return None
+
+    async def _speculative_fetch(self, existing: list) -> list[dict]:
+        """用 TweetResultByRestId 探测 UserTweets 缓存遗漏的最新推文。"""
+        import time as _time, itertools
+        EPOCH = 1288834974657
+        now_ts = int(_time.time() * 1000) - EPOCH
+        highest = max(int(t["id"]) for t in existing) if existing else 0
+
+        # 5 个时间点覆盖最近 12 小时，每个时间点 5 个 worker+seq
+        points = 5
+        workers_try = [427, 436, 435, 425, 430]
+        seqs_try = [0, 1, 2, 5, 10, 20, 38, 50]
+        combos = list(itertools.islice(itertools.product(workers_try, seqs_try), 5 * points))
+        per_point = len(combos) // points
+        found = []
+        for t_offset in range(points):
+            ts = now_ts - t_offset * (43200000 // points)  # 12h / points
+            if ts <= (highest >> 22):
+                continue
+            for w, s in combos[t_offset * per_point : (t_offset + 1) * per_point]:
+                est_id = str((ts << 22) | ((w << 12) | s))
+                if int(est_id) <= highest:
+                    continue
+                tweet = await self._fetch_tweet_by_id(est_id)
+                if tweet:
+                    found.append(tweet)
+                    highest = max(highest, int(tweet["id"]))
+        return found
 
     @staticmethod
     def _extract_screen_name(tweet_result: dict) -> Optional[str]:
