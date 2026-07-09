@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-GitHub Actions 版入口 — 长运行循环。
-内部 while True + sleep(180s) 循环，约 350 分钟后退出。
-cron 每 4 小时保底重启。不依赖自触发，无竞态风险。
+GitHub Actions 版 — 单次检查即退出，由 cron 高频调度。
+每次运行 ≤30 秒，挂了不影响，下次 cron 自动补上。
 """
 
 import asyncio
@@ -27,9 +26,6 @@ logging.basicConfig(
 logger = logging.getLogger("github-monitor")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-CHECK_INTERVAL = 180          # 3 分钟
-MAX_RUNTIME = 350 * 60        # 350 分钟，< 6h 上限
 
 
 def _load_recipients_live() -> List[str]:
@@ -73,69 +69,47 @@ async def main():
 
     recipients = _load_recipients_live()
     if not recipients:
-        logger.error("收件人列表为空")
-        sys.exit(1)
+        logger.warning("收件人列表为空，跳过")
+        sys.exit(0)
 
     scraper = TwitterScraper(
         target_user=os.getenv("TARGET_USER", "aleabitoreddit"),
-        proxy=os.getenv("TWITTER_PROXY", "").strip() or None,
+        proxy=None,
         auth_token=os.getenv("X_AUTH_TOKEN", ""),
     )
     tracker = StockTracker()
     mailer = Mailer(smtp_cfg)
 
-    logger.info(f"🚀 启动 | 间隔={CHECK_INTERVAL}s | 最长={MAX_RUNTIME // 60}m | @{os.getenv('TARGET_USER', 'aleabitoreddit')}")
-
-    start = datetime.now()
-
     try:
-        iteration = 0
-        while True:
-            iteration += 1
-            elapsed = (datetime.now() - start).total_seconds()
-            logger.info(f"── 第 {iteration} 轮 (已运行 {int(elapsed // 60)}m) ──")
+        tweets = await scraper.get_recent_tweets(count=10)
+        if not tweets:
+            logger.info("无推文")
+            return
 
-            # 每轮刷新收件人列表
-            recipients = _load_recipients_live()
-            if not recipients:
-                logger.warning("收件人为空，跳过本轮")
-            else:
-                try:
-                    tweets = await scraper.get_recent_tweets(count=10)
-                    if tweets:
-                        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-                        recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
-                        # 调试：打印所有1h内的推文ID和去重判断
-                        for t in recent:
-                            already = tracker.is_tweet_processed(t["id"])
-                            logger.info(f"  {'跳过' if already else '新→'} [{t['id']}] {(t.get('created_at') or '?').strftime('%H:%M') if t.get('created_at') else '?'} | {t['text'][:60]}...")
-                        new_tweets = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
-                        if new_tweets:
-                            logger.info(f"发现 {len(new_tweets)} 篇新推文")
-                            for tweet in new_tweets:
-                                stocks = extract_stocks(tweet["text"])
-                                label = f"{[(c,m) for c,m in stocks]}" if stocks else "无标的"
-                                logger.info(f"推送: {tweet['id']} {label}")
-                                mailer.send_tweet_alert(
-                                    to_addrs=recipients,
-                                    tweet_text=tweet["text"],
-                                    tweet_url=tweet["url"],
-                                    tweet_time=tweet["created_at"],
-                                    stocks=stocks or [],
-                                    images=tweet.get("images", []),
-                                )
-                                tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
-                except Exception as e:
-                    logger.error(f"检查异常: {e}", exc_info=True)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+        new = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
 
-            if elapsed >= MAX_RUNTIME:
-                logger.info(f"已达 {MAX_RUNTIME // 60}m 上限，正常退出")
-                break
+        if not new:
+            return
 
-            await asyncio.sleep(CHECK_INTERVAL)
+        logger.info(f"发现 {len(new)} 篇新推文")
+        for tweet in new:
+            stocks = extract_stocks(tweet["text"])
+            label = f"{[(c,m) for c,m in stocks]}" if stocks else "无标的"
+            logger.info(f"推送: {tweet['id']} {label}")
+            mailer.send_tweet_alert(
+                to_addrs=recipients,
+                tweet_text=tweet["text"],
+                tweet_url=tweet["url"],
+                tweet_time=tweet["created_at"],
+                stocks=stocks or [],
+                images=tweet.get("images", []),
+            )
+            tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
 
-    except KeyboardInterrupt:
-        pass
+    except Exception as e:
+        logger.error(f"异常: {e}", exc_info=True)
     finally:
         tracker.close()
         await scraper.close()

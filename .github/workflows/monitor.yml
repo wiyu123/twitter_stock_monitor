@@ -2,16 +2,18 @@ name: 股票监控
 
 on:
   schedule:
-    - cron: '0 */4 * * *'          # 每 4h 保底重启
-    - cron: '30 */4 * * *'         # 偏移 30min，双重保险
+    # 每 5 分钟 3 条偏移 cron，保证任何时点挂了最多 5min 恢复
+    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 * * * *'
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
   workflow_dispatch:
 
+# 防重叠：同一时间只跑一个实例
 concurrency: monitor
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 3             # 单次 ≤3min，挂了立刻释放
     permissions:
       contents: read
 
@@ -27,14 +29,14 @@ jobs:
       - name: 安装依赖
         run: pip install httpx pyyaml deep-translator
 
-      - name: 恢复记录
+      - name: 恢复去重记录
         uses: actions/cache/restore@v4
         id: cache
         with:
           path: tweets.db
           key: monitor-db-v1
 
-      - name: 运行监控 (3min/次 × ~350min)
+      - name: 单次检查
         run: python github_main.py
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -45,7 +47,7 @@ jobs:
           TARGET_USER: ${{ vars.TARGET_USER || 'aleabitoreddit' }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
 
-      - name: 保存记录
+      - name: 保存去重记录
         uses: actions/cache/save@v4
         if: always()
         with:
