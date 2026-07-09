@@ -8,6 +8,8 @@ import base64
 import json
 import logging
 import re
+import time
+import itertools
 from datetime import datetime
 from typing import Optional
 
@@ -131,8 +133,12 @@ class TwitterScraper:
         )
 
     async def _api_headers(self) -> dict:
-        """获取 API 请求头（含认证信息）"""
-        h = {"Authorization": BEARER_TOKEN}
+        """获取 API 请求头（含认证信息 + CDN 绕过）"""
+        h = {
+            "Authorization": BEARER_TOKEN,
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+        }
 
         # 已登录: 用 auth_token cookie + ct0 CSRF token
         if self.auth_token:
@@ -140,7 +146,6 @@ class TwitterScraper:
                 await self._init_auth_session()
             if self._ct0_token:
                 h["x-csrf-token"] = self._ct0_token
-            # 登录状态不需要 guest token
             return h
 
         # 未登录: 用 guest token
@@ -281,6 +286,8 @@ class TwitterScraper:
                 "features": json.dumps(FEATURES),
             }
 
+            # CDN 缓存绕过：加 _cb 随机数
+            params["_cb"] = str(int(time.time() * 1000))
             try:
                 r = await client.get(
                     f"https://x.com/i/api/graphql/{qid}/{query_name}",
@@ -374,9 +381,8 @@ class TwitterScraper:
 
     async def _speculative_fetch(self, existing: list) -> list[dict]:
         """用 TweetResultByRestId 探测 UserTweets 缓存遗漏的最新推文。"""
-        import time as _time, itertools
         EPOCH = 1288834974657
-        now_ts = int(_time.time() * 1000) - EPOCH
+        now_ts = int(time.time() * 1000) - EPOCH
         highest = max(int(t["id"]) for t in existing) if existing else 0
 
         # 5 个时间点覆盖最近 12 小时，每个时间点 5 个 worker+seq
@@ -413,57 +419,6 @@ class TwitterScraper:
             )
         except Exception:
             return None
-
-    async def _check_pinned_tweets(self, headers: dict) -> list[dict]:
-        """用 TweetResultByRestId 扫描最近推文，弥补 UserTweets 的 CDN 缓存延迟。
-
-        UserTweets API 可能返回几周前的数据。这里用 Snowflake ID 时间戳估算，
-        在"上一批已知推文"和"现在"之间扫描，找到漏掉的实时推文。
-        """
-        import time as time_mod
-
-        found = []
-        EPOCH = 1288834974657
-        now_ts = int(time_mod.time() * 1000) - EPOCH
-        client = self._get_client()
-        qid = self._get_query_id("TweetResultByRestId")
-        if not qid:
-            return found
-
-        # 已知该用户的 worker: 427(置顶推文), 436(688017推文)，优先尝试
-        # 序列号从小到大（新推文 seq 递增）
-        workers = [427, 436, 428, 435, 426, 437, 425, 438, 429, 434]
-        seqs = [0, 1, 2, 3, 4, 5, 10, 20, 30, 38, 50, 100]
-
-        # 从"24小时前"到"现在"，密集扫描
-        start_ts = now_ts - 86400000  # 最近 24 小时
-        max_checks = 30
-        step = max(1, (now_ts - start_ts) // max_checks)
-
-        checked = 0
-        highest_found_id = 0
-
-        t = now_ts
-        while t >= start_ts and checked < max_checks:
-            for w in workers:
-                for s in seqs:
-                    if checked >= max_checks:
-                        break
-                    est_id = str((t << 22) | ((w << 12) | s))
-                    tweet = await self._fetch_tweet_by_id(est_id)
-                    checked += 1
-                    if tweet:
-                        found.append(tweet)
-                        highest_found_id = max(highest_found_id, int(tweet["id"]))
-                        logger.debug(f"实时发现: {tweet['id'][:12]}...")
-                        break  # 这个时间点找到了，跳到下一个
-                if checked >= max_checks:
-                    break
-            t -= step
-
-        if found:
-            logger.info(f"实时探测找到 {len(found)} 条新推文 (共检查 {checked} 个候选)")
-        return found
 
     async def _parse_timeline(self, data: dict) -> list[dict]:
         """解析 GraphQL UserTweets 返回的时间线"""
