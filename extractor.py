@@ -113,25 +113,10 @@ def extract_stocks(text: str) -> list[tuple[str, str]]:
         if code not in found:
             found[code] = classify_market(code)
 
-    # 3) 美股 $TICKER (优先)
-    dollar_tickers = set()
+    # 3) 美股: 只提取 $TICKER 格式 (Serenity 总是用 $ 前缀)
     for m in _US_DOLLAR_RE.finditer(text):
         ticker = m.group(1)
-        if ticker.upper() not in BLACKLIST:
-            dollar_tickers.add(ticker.upper())
-            found[ticker.upper()] = "美股"
-
-    # 4) 美股普通大写词
-    for m in _US_PLAIN_RE.finditer(text):
-        ticker = m.group(1).upper()
-        if ticker in BLACKLIST:
-            continue
-        if ticker in dollar_tickers:
-            continue
-        # 过滤纯数字 (比如年份 2026)
-        if ticker.isdigit():
-            continue
-        found[ticker] = "美股"
+        found[ticker.upper()] = "美股"
 
     # 按文本中出现顺序排序
     results = []
