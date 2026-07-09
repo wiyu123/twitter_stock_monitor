@@ -137,6 +137,7 @@ async def main():
     except KeyboardInterrupt:
         pass
     finally:
+        tracker.close()
         await scraper.close()
 
 

@@ -116,34 +116,20 @@ class Monitor:
                 tweet_time = tweet["created_at"]
                 tweet_url = tweet["url"]
 
-                # 提取股票代码
                 stocks = extract_stocks(tweet_text)
-                if not stocks:
-                    continue
+                label = f"{[(c, m) for c, m in stocks]}" if stocks else "无股票标的"
+                logger.info(f"新推文! {tweet_id}: {label}")
 
-                # 过滤已通知过的
-                new_stocks = self.tracker.filter_new_stocks(stocks)
-                if not new_stocks:
-                    continue
-
-                logger.info(
-                    f"✨ 发现新标的! 推文 {tweet_id}: {[(c, m) for c, m in new_stocks]}"
-                )
-
-                # 发送邮件
                 success = self.mailer.send_tweet_alert(
                     to_addrs=self.recipients,
                     tweet_text=tweet_text,
                     tweet_url=tweet_url,
                     tweet_time=tweet_time,
-                    stocks=new_stocks,
+                    stocks=stocks or [],
                     images=tweet.get("images", []),
                 )
 
                 if success:
-                    # 标记为已通知
-                    for code, market in new_stocks:
-                        self.tracker.mark_stock_seen(code, tweet_id, tweet_time)
                     new_send_count += 1
 
             if new_send_count > 0:
