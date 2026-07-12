@@ -2,13 +2,12 @@ name: 股票监控
 
 on:
   schedule:
-    - cron: '0 * * * *'        # 每小时 4 个偏移 cron 保底
-    - cron: '15 * * * *'
-    - cron: '30 * * * *'
-    - cron: '45 * * * *'
+    - cron: '0 */2 * * *'       # 每 2h 保底，主要靠自触发
   workflow_dispatch:
 
-concurrency: monitor
+concurrency:
+  group: monitor
+  cancel-in-progress: false     # 已完成实例优先，新触发排队等
 
 jobs:
   monitor:
