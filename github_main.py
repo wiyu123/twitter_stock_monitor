@@ -19,7 +19,7 @@ logger = logging.getLogger("github-monitor")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CHECK_INTERVAL = 120          # 2 分钟
-MAX_RUNTIME = 115 * 60        # 115 分钟，cron 2h 前 5min 退出
+MAX_RUNTIME = 119 * 60        # 119 分钟，与 cron 2h 几乎无缝
 
 
 def _load_recipients_live() -> List[str]:

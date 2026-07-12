@@ -2,7 +2,7 @@ name: 股票监控
 
 on:
   schedule:
-    - cron: '0 */2 * * *'       # 每 2h 重启保活
+    - cron: '0 */2 * * *'       # 每 2h，119min循环+1min空窗可忽略
   workflow_dispatch:
 
 concurrency:
