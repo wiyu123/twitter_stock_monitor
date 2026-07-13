@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-单实例 55 分钟循环，每 120 秒检查一次。
-退出后由 workflow 自触发续命，SQLite WAL 防重复。
+单次检查即退出，自触发由 workflow 的 cache save 之后完成。
+每次运行 <30 秒，不会被 GitHub 杀。
 """
 
 import asyncio, logging, os, sys
 from datetime import datetime, timedelta, timezone
-from typing import List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from scraper import TwitterScraper
@@ -18,11 +17,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("github-monitor")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CHECK_INTERVAL = 120          # 2 分钟
-MAX_RUNTIME = 355 * 60        # 355 分钟，cron 6h 前 5min 退出
 
-
-def _load_recipients_live() -> List[str]:
+def _load_recipients_live():
     repo = os.getenv("GITHUB_REPOSITORY", "wiyu123/twitter_stock_monitor")
     url = f"https://raw.githubusercontent.com/{repo}/{os.getenv('GITHUB_REF_NAME','main')}/emails.csv"
     try:
@@ -52,7 +48,7 @@ async def main():
         logger.error("未设置 SMTP"); sys.exit(1)
 
     recipients = _load_recipients_live()
-    if not recipients: logger.error("收件人为空"); sys.exit(1)
+    if not recipients: logger.warning("收件人为空"); sys.exit(0)
 
     scraper = TwitterScraper(
         target_user=os.getenv("TARGET_USER", "aleabitoreddit"),
@@ -61,60 +57,33 @@ async def main():
     tracker = StockTracker()
     mailer = Mailer(smtp_cfg)
 
-    logger.info(f"🚀 启动 | 间隔={CHECK_INTERVAL}s | 最长={MAX_RUNTIME//60}m")
-    start = datetime.now()
-    sent_in_memory: set = set()   # 进程内存去重：本轮已发的不会重复发
+    sent_in_memory = set()
 
     try:
-        iteration = 0
-        while True:
-            iteration += 1
-            elapsed = (datetime.now() - start).total_seconds()
-            logger.info(f"── 第 {iteration} 轮 ({int(elapsed//60)}m) ──")
-
-            recipients = _load_recipients_live()
-            if not recipients:
-                await asyncio.sleep(CHECK_INTERVAL)
-                continue
-
-            try:
-                tweets = await scraper.get_recent_tweets(count=10)
-                if tweets:
-                    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-                    recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
-                    new = [t for t in recent
-                           if not tracker.is_tweet_processed(t["id"])
-                           and t["id"] not in sent_in_memory]
-                    if new:
-                        logger.info(f"发现 {len(new)} 篇新推文")
-                        for tweet in new:
-                            # ── 收件人刷新 + 安全带 ──
-                            if tweet["id"] in sent_in_memory or tracker.is_tweet_processed(tweet["id"]):
-                                logger.warning(f"  跳过(二次去重): {tweet['id']}")
-                                continue
-                            stocks = extract_stocks(tweet["text"])
-                            mailer.send_tweet_alert(
-                                to_addrs=recipients, tweet_text=tweet["text"],
-                                tweet_url=tweet["url"], tweet_time=tweet["created_at"],
-                                stocks=stocks or [], images=tweet.get("images", []),
-                            )
-                            tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
-                            sent_in_memory.add(tweet["id"])
-                            # ── 验证去重写入 ──
-                            ok = tracker.is_tweet_processed(tweet["id"])
-                            logger.info(f"  去重确认: {'✅' if ok else '❌ 写入失败!'} {tweet['id']}")
-            except Exception as e:
-                logger.error(f"检查异常: {e}", exc_info=True)
-
-            if elapsed >= MAX_RUNTIME:
-                logger.info(f"已达 {MAX_RUNTIME//60}m 上限，正常退出")
-                break
-            await asyncio.sleep(CHECK_INTERVAL)
-
-    except KeyboardInterrupt: pass
+        tweets = await scraper.get_recent_tweets(count=10)
+        if tweets:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+            recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+            new = [t for t in recent
+                   if not tracker.is_tweet_processed(t["id"])
+                   and t["id"] not in sent_in_memory]
+            if new:
+                logger.info(f"发现 {len(new)} 篇新推文")
+                for tweet in new:
+                    stocks = extract_stocks(tweet["text"])
+                    mailer.send_tweet_alert(
+                        to_addrs=recipients, tweet_text=tweet["text"],
+                        tweet_url=tweet["url"], tweet_time=tweet["created_at"],
+                        stocks=stocks or [], images=tweet.get("images", []),
+                    )
+                    tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
+                    sent_in_memory.add(tweet["id"])
+    except Exception as e:
+        logger.error(f"检查异常: {e}", exc_info=True)
     finally:
         tracker.close()
         await scraper.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
