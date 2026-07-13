@@ -2,17 +2,13 @@ name: 股票监控
 
 on:
   schedule:
-    - cron: '0 */2 * * *'       # 每 2h，119min循环+1min空窗可忽略
+    - cron: '0 */6 * * *'       # 每 6h 保底，日常靠内部 355min 循环
   workflow_dispatch:
-
-concurrency:
-  group: monitor
-  cancel-in-progress: false      # 等旧实例退出再启动新的
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 125          # 115min 循环 + 10min buffer
+    timeout-minutes: 360
     permissions:
       contents: read
 
@@ -35,7 +31,7 @@ jobs:
           path: tweets.db
           key: monitor-db-v1
 
-      - name: 运行监控 (2min/次循环)
+      - name: 运行监控 (2min/次 × 355min)
         run: python github_main.py
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
