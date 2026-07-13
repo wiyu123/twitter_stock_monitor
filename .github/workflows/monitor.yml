@@ -28,7 +28,7 @@ jobs:
         id: cache
         with:
           path: tweets.db
-          key: monitor-db-v1
+          key: monitor-db-v2
 
       - name: 运行监控 (2min/次 × 110min)
         run: python github_main.py
@@ -46,7 +46,7 @@ jobs:
         if: always()
         with:
           path: tweets.db
-          key: monitor-db-v1
+          key: monitor-db-v2
 
       - name: 自触发
         if: always()

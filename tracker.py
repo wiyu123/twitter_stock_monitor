@@ -19,8 +19,10 @@ class StockTracker:
 
     def __init__(self):
         self._conn = sqlite3.connect(DB_FILE)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
+        # ── DELETE 模式：写入直接刷到主文件，不依赖 WAL ──
+        # GitHub Cache 只缓存主文件，WAL 数据在进程间会丢失
+        self._conn.execute("PRAGMA journal_mode=DELETE")
+        self._conn.execute("PRAGMA synchronous=FULL")
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS tweets ("
             "  tweet_id TEXT PRIMARY KEY,"
