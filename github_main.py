@@ -63,6 +63,7 @@ async def main():
 
     logger.info(f"🚀 启动 | 间隔={CHECK_INTERVAL}s | 最长={MAX_RUNTIME//60}m")
     start = datetime.now()
+    sent_in_memory: set = set()   # 进程内存去重：本轮已发的不会重复发
 
     try:
         iteration = 0
@@ -81,10 +82,16 @@ async def main():
                 if tweets:
                     cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
                     recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
-                    new = [t for t in recent if not tracker.is_tweet_processed(t["id"])]
+                    new = [t for t in recent
+                           if not tracker.is_tweet_processed(t["id"])
+                           and t["id"] not in sent_in_memory]
                     if new:
                         logger.info(f"发现 {len(new)} 篇新推文")
                         for tweet in new:
+                            # ── 收件人刷新 + 安全带 ──
+                            if tweet["id"] in sent_in_memory or tracker.is_tweet_processed(tweet["id"]):
+                                logger.warning(f"  跳过(二次去重): {tweet['id']}")
+                                continue
                             stocks = extract_stocks(tweet["text"])
                             mailer.send_tweet_alert(
                                 to_addrs=recipients, tweet_text=tweet["text"],
@@ -92,6 +99,10 @@ async def main():
                                 stocks=stocks or [], images=tweet.get("images", []),
                             )
                             tracker.mark_tweet_done(tweet["id"], tweet["created_at"])
+                            sent_in_memory.add(tweet["id"])
+                            # ── 验证去重写入 ──
+                            ok = tracker.is_tweet_processed(tweet["id"])
+                            logger.info(f"  去重确认: {'✅' if ok else '❌ 写入失败!'} {tweet['id']}")
             except Exception as e:
                 logger.error(f"检查异常: {e}", exc_info=True)
 
