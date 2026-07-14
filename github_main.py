@@ -16,7 +16,7 @@ logger = logging.getLogger("monitor")
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 INTERVAL = 120          # 2 分钟
-MAX_RUNTIME = 25 * 60   # 25 分钟
+MAX_RUNTIME = 60 * 60   # 60 分钟
 
 
 def _load_recipients():
