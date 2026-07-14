@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: monitor
-  cancel-in-progress: false      # 排队等，不抢杀
+  cancel-in-progress: true       # 重复触发直接取消，不排队
 
 jobs:
   monitor:
@@ -31,8 +31,8 @@ jobs:
         uses: actions/cache/restore@v4
         id: cache
         with:
-          path: seen_tweets.json
-          key: monitor-state-v5
+          path: tweets.db
+          key: monitor-db-v3
 
       - name: 运行 (2min/次 × 60min)
         run: python github_main.py
@@ -42,15 +42,15 @@ jobs:
           SMTP_SSL: ${{ secrets.SMTP_SSL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          TARGET_USER: ${{ vars.TARGET_USER || 'aleabitoreddit' }}
+          TARGET_USER: ${{ vars.TARGET_USER || 'aleaborteddit' }}
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
 
       - name: 保存去重记录
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: seen_tweets.json
-          key: monitor-state-v5
+          path: tweets.db
+          key: monitor-db-v3
 
       - name: 自触发
         if: always()
