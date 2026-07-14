@@ -2,13 +2,17 @@ name: 股票监控
 
 on:
   schedule:
-    - cron: '*/30 * * * *'      # 每 30 分钟
+    - cron: '0 */4 * * *'       # 4h 保底
   workflow_dispatch:
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false      # 排队等，不抢杀
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 30
     permissions:
       contents: read
 
@@ -30,7 +34,7 @@ jobs:
           path: seen_tweets.json
           key: monitor-state-v5
 
-      - name: 运行
+      - name: 运行 (2min/次 × 25min)
         run: python github_main.py
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -47,3 +51,14 @@ jobs:
         with:
           path: seen_tweets.json
           key: monitor-state-v5
+
+      - name: 自触发
+        if: always()
+        run: |
+          sleep 3
+          curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/monitor.yml/dispatches" \
+            -d '{"ref":"main"}' > /dev/null 2>&1
+          echo "done"

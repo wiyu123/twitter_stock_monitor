@@ -1,5 +1,5 @@
 """
-单次检查即退出。由 cron 每 30 分钟调度，无自触发。
+内部循环 25 分钟，每 2 分钟检查，退出后由 workflow 自触发续命。
 """
 
 import asyncio, logging, os, sys
@@ -14,6 +14,9 @@ from mailer import Mailer, load_recipients
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger("monitor")
 BASE = os.path.dirname(os.path.abspath(__file__))
+
+INTERVAL = 120          # 2 分钟
+MAX_RUNTIME = 25 * 60   # 25 分钟
 
 
 def _load_recipients():
@@ -45,34 +48,50 @@ async def main():
         logger.error("SMTP 未配置"); sys.exit(1)
 
     recipients = _load_recipients()
-    if not recipients: logger.warning("无收件人"); sys.exit(0)
+    if not recipients: logger.error("无收件人"); sys.exit(1)
 
     scraper = TwitterScraper(target_user=os.getenv("TARGET_USER","aleabitoreddit"), auth_token=os.getenv("X_AUTH_TOKEN",""))
     tracker = StockTracker()
     mailer = Mailer(cfg)
 
+    logger.info(f"🚀 启动 | 间隔={INTERVAL}s | 最长={MAX_RUNTIME//60}m")
+    start = datetime.now()
+
     try:
-        tweets = await scraper.get_recent_tweets(count=10)
-        if not tweets: return
+        iteration = 0
+        while True:
+            iteration += 1
+            elapsed = (datetime.now() - start).total_seconds()
+            logger.info(f"── 第 {iteration} 轮 ({int(elapsed//60)}m) ──")
 
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-        recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+            recipients = _load_recipients()
+            if not recipients:
+                await asyncio.sleep(INTERVAL); continue
 
-        for t in recent:
-            if tracker.is_processed(t["id"]):
-                logger.debug(f"跳过已推送: {t['id']}")
-                continue
-            stocks = extract_stocks(t["text"])
-            logger.info(f"推送: {t['id']} {[(c,m) for c,m in stocks] if stocks else '无标的'}")
+            try:
+                tweets = await scraper.get_recent_tweets(count=10)
+                if tweets:
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+                    recent = [t for t in tweets if t["created_at"] and t["created_at"] >= cutoff]
+                    for t in recent:
+                        if tracker.is_processed(t["id"]): continue
+                        stocks = extract_stocks(t["text"])
+                        logger.info(f"推送: {t['id']} {[(c,m) for c,m in stocks] if stocks else '无标的'}")
+                        mailer.send_tweet_alert(
+                            to_addrs=recipients, tweet_text=t["text"], tweet_url=t["url"],
+                            tweet_time=t["created_at"], stocks=stocks or [],
+                            images=t.get("images", []),
+                        )
+                        tracker.mark(t["id"])
+            except Exception as e:
+                logger.error(f"检查异常: {e}", exc_info=True)
 
-            mailer.send_tweet_alert(
-                to_addrs=recipients, tweet_text=t["text"], tweet_url=t["url"],
-                tweet_time=t["created_at"], stocks=stocks or [],
-                images=t.get("images", []),
-            )
-            tracker.mark(t["id"])
-    except Exception as e:
-        logger.error(f"异常: {e}", exc_info=True)
+            if elapsed >= MAX_RUNTIME:
+                logger.info(f"已达 {MAX_RUNTIME//60}m，退出")
+                break
+            await asyncio.sleep(INTERVAL)
+
+    except KeyboardInterrupt: pass
     finally:
         tracker.close()
         await scraper.close()
