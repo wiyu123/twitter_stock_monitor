@@ -16,7 +16,7 @@ logger = logging.getLogger("monitor")
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 INTERVAL = 120          # 2 分钟
-MAX_RUNTIME = 350 * 60  # 350 分钟
+MAX_RUNTIME = 55 * 60    # 55 分钟
 STATE_FILE = os.path.join(BASE, "seen_tweets.json")
 
 
